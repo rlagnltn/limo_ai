@@ -2,15 +2,15 @@
 
 LIMO 자율주행 대회(Autorace 2026)용 ROS2 워크스페이스(`wego_ws`) 코드 저장소입니다.
 
-## 버전 관리 방식: 저장소 1개 + 브랜치 3개
+## 버전 관리 방식: 저장소 1개 + 버전별 브랜치
 
-서로 다른 코드 버전 3개를 **하나의 저장소에 브랜치로 나누어** 관리합니다.
+서로 다른 코드 버전을 **하나의 저장소(rlagnltn/limo_ai)에 브랜치로 나누어** 관리합니다.
 
 ```
-저장소
-├─ main   ← 버전 1 (현재 LIMO의 /home/wego/wego_ws)
-├─ v2     ← 버전 2 (추후 업로드)
-└─ v3     ← 버전 3 (추후 업로드)
+rlagnltn/limo_ai
+├─ main   ← README만 유지
+├─ v1     ← 버전 1 (LIMO의 /home/wego/wego_ws)
+└─ v2     ← 버전 2 (추후 업로드)
 ```
 
 이 방식을 택한 이유:
@@ -22,8 +22,8 @@ LIMO 자율주행 대회(Autorace 2026)용 ROS2 워크스페이스(`wego_ws`) �
 
 ```bash
 # 저장소를 받은 뒤 새 브랜치 생성
-git clone <저장소 URL> wego_ws_v2 && cd wego_ws_v2
-git checkout -b v2
+git clone https://github.com/rlagnltn/limo_ai.git wego_ws_v2 && cd wego_ws_v2
+git checkout -b v2 origin/v1
 # 해당 버전의 src/ 등 파일로 교체한 뒤
 git add -A
 git commit -m "버전 2 업로드"
