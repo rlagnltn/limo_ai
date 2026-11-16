@@ -1,0 +1,17 @@
+# colcon 빌드 산출물 (colcon build 시 재생성)
+build/
+install/
+log/
+
+# 주행 기록 bag 데이터 (대용량)
+drive_bags/
+
+# 압축 파일
+*.zip
+
+# 학습용 원본 데이터셋 이미지 (대용량)
+src/dl_ros2_application/weight/made_dataset/
+
+# Python 캐시
+__pycache__/
+*.pyc

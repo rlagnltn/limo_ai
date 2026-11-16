@@ -1,0 +1,36 @@
+/limo_control:
+  ros__parameters:
+    default_speed: 0.2
+    p_gain: 0.02
+    # /yolo_bounding_boxes: trigger once per continuously visible sign.
+    # Common area threshold for left/right/slow signs and pedestrian_sign.
+    sign_min_area_px2: 4200
+    slow_sign_duration_sec: 8.0
+    pedestrian_stop_duration_sec: 3.0
+    # The base driver's existing 28-degree limit is retained.
+    turn_steering_angle_deg: 30.0
+    turn_duration_sec: 3.0
+
+    # Zigzag: camera alignment -> latch IMU yaw -> hold heading at half speed.
+    # Missing/invalid/stale IMU or unmeasured boundaries stop the vehicle.
+    imu_topic: /imu
+    imu_timeout_sec: 0.5
+    zigzag_lane_timeout_sec: 0.5
+    zigzag_speed_scale: 0.5
+    # All four conditions below must hold continuously before latching yaw.
+    zigzag_alignment_confirm_sec: 0.5
+    # Image centerline tilt; this is not a calibrated vehicle heading angle.
+    zigzag_alignment_max_tilt_deg: 5.0
+    zigzag_alignment_max_center_error_px: 20.0
+    zigzag_alignment_max_yaw_rate_deg_sec: 5.0
+    zigzag_alignment_max_bend_px: 12.0
+    # Gains produce curvature; angular velocity scales with commanded speed.
+    zigzag_heading_p_gain: 8.0
+    zigzag_heading_d_gain: 1.0
+    zigzag_alignment_center_gain: 0.02
+    # Boundary correction leaves the stored IMU target unchanged.
+    zigzag_boundary_margin_px: 80.0
+    zigzag_boundary_gain: 0.02
+    zigzag_max_steering_angle_deg: 15.0
+    use_sim_time: false
+

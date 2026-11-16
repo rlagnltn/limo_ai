@@ -1,0 +1,15 @@
+{
+  "passed": true,
+  "images": 167,
+  "image_label_overlay_triplets": 167,
+  "annotation_boxes": 459,
+  "source_frames_checked": 67,
+  "coordinates_valid": true,
+  "source_crop_bytes_verified": true,
+  "source_frame_split_overlap": 0,
+  "split_images": {
+    "train": 91,
+    "val": 76
+  },
+  "errors": []
+}

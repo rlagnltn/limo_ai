@@ -1,0 +1,64 @@
+/detect_line:
+  ros__parameters:
+    # what kind of debug image you want to get?
+    # if you set 0 : you will get roi,
+    # if you set 1 : you will get mask of lane,
+    # if you set 2 : tracking target and corridor center for zigzag alignment
+    debug_image_num: 2
+    # Ignore isolated color noise; no line length/width filtering.
+    min_lane_pixels: 20
+    # 90th-percentile deviation from a straight fit in the lookahead mask.
+    curve_min_deviation_px: 12.0
+    # After observing the split, require one stable two-boundary corridor.
+    merge_confirm_sec: 0.5
+    merge_width_tolerance_px: 20.0
+    merge_boundary_margin_px: 60
+
+    # Zigzag detection selects the IMU control section; it does not steer it.
+    # Five image bands measure the corridor axis for initial alignment.
+    # Both boundaries must be measured; inferred widths cannot authorize motion.
+    # The displayed center and ordinary-lane transition retain image smoothing.
+    # Ordinary sections retain the left ROI and reference_distance below.
+    # Detect at least two direction reversals, each spanning 12 pixels.
+    zigzag_min_segment_px: 12
+    zigzag_min_reversals: 2
+    # Extra rows above the control ROI; normal-lane ROI stays unchanged.
+    zigzag_lookahead_px: 60
+    # Confirm exit only while non-zigzag boundaries are actually measured.
+    zigzag_exit_delay_sec: 0.5
+    # Image target smoothing, not IMU heading feedback (seconds).
+    zigzag_smoothing_sec: 0.25
+    # Maximum target correction speed, independent of FPS (640x480 pixels/sec).
+    zigzag_max_center_speed_px_sec: 120.0
+    # Vehicle forward-axis reference in the 640x480 image; adjust per camera.
+    zigzag_center_reference_x: 320
+    # Vertical sampling band around the fixed target height (pixels).
+    zigzag_center_band_px: 40
+    # Search near each previous boundary, including across the image center.
+    zigzag_boundary_margin_px: 60
+    # Suppress small center changes within this distance (pixels).
+    zigzag_center_deadband_px: 2.0
+    # Infer the displayed center from one boundary for at most this many seconds.
+    # IMU driving still stops until both boundaries are measured again.
+    # The timeout starts at the last frame with BOTH boundaries measured.
+    zigzag_center_hold_sec: 0.3
+
+    # the floor and celling of lane color in hls
+    lane_h_h: 60
+    lane_h_l: 0
+    lane_l_h: 220
+    lane_l_l: 90
+    lane_s_h: 255
+    lane_s_l: 70
+
+    # set the reference distance of the lane
+    # higher number the closer to lane
+    reference_distance: 50
+
+    # Region of intererst in detecting lane
+    roi_x_h: 320
+    roi_x_l: 0
+    roi_y_h: 480
+    roi_y_l: 340
+    use_sim_time: false
+
