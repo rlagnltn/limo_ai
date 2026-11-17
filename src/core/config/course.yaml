@@ -1,0 +1,17 @@
+core:
+  ros__parameters:
+    enabled: true
+    start_stage: 1
+    stop_after_stage: false
+    input_timeout: 0.5
+    detection_timeout: 1.0
+    sign_timeout: 0.5
+    min_confidence: 0.7
+    confirm_frames: 3
+    # Areas in image pixels, ordered by YOLO class IDs 0..7.
+    class_min_areas: [2900.0, 2700.0, 1800.0, 1800.0, 6300.0, 6300.0, 1800.0, 1800.0]
+    active_timeout: 120.0
+
+yolo_object_detection_node:
+  ros__parameters:
+    canonical_class_names: [red_light, green_light, left_sign, right_sign, pedestrian_sign, slow_sign, parking_sign, traffic_cone]

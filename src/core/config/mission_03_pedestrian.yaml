@@ -1,0 +1,7 @@
+core:
+  ros__parameters:
+    # Fallback distance after sign confirmation if no calibrated stop line is available.
+    pedestrian_stop_distance: 0.45
+limo_control:
+  ros__parameters:
+    pedestrian_wait: 3.0

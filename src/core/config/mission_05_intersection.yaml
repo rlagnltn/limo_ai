@@ -1,0 +1,12 @@
+core:
+  ros__parameters:
+    branch_exit_confirm: 0.5
+limo_control:
+  ros__parameters:
+    # Class 2 = left, class 3 = right. Heading change is measured using odometry.
+    branch_approach: 0.2
+    branch_angle: 0.7
+    branch_curvature: 1.5
+    branch_speed: 0.08
+    branch_exit_distance: 0.3
+    branch_yaw_tolerance: 0.08

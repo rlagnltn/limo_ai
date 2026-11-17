@@ -1,0 +1,6 @@
+core:
+  ros__parameters:
+    # Travel after class 5 confirmation. The model must recognize the ground sign/text.
+    slow_distance: 0.6
+    slow_min_seconds: 2.0
+    slow_sign_absence: 0.5
