@@ -31,10 +31,11 @@ class CourseTests(unittest.TestCase):
 
     def test_full_course_replay(self):
         c = Course(config())
-        valid = dict(valid=True, lane_count=1)
+        valid = dict(valid=True, lane_count=1, metric_valid=True,
+                     ground_centers=[[.8,0.]], ground_heading=0.,ground_lines=[[0.,.825],[0.,-.825]])
         def tick(t, distance=0, signs=(), mode='follow', phase='running', lane=None):
             return c.tick(Observation(t, distance, frozenset(signs), valid if lane is None else lane,
-                                      (), mode, phase))
+                                      (), mode, phase, lidar_clear=True))
         tick(0)
         self.assertEqual(tick(1, signs=[5]).command['mode'], 'slow')
         tick(3, .7, mode='slow')
@@ -49,8 +50,8 @@ class CourseTests(unittest.TestCase):
         tick(12, 2)
         tick(13, 2, lane=dict(valid=True, lane_count=3))
         self.assertEqual(tick(13.5, 2, lane=dict(valid=True, lane_count=3)).command['mode'], 'obstacles')
-        tick(15, 3.1, mode='obstacles')
-        self.assertTrue(tick(16.1, 3.1, mode='obstacles').done)
+        tick(15, 3.1, signs=[2], mode='obstacles')
+        self.assertTrue(tick(16.1, 3.1, signs=[2], mode='obstacles').done)
         tick(17, 3.1)
         self.assertEqual(tick(18, 3.1, signs=[2]).command['mode'], 'branch_a')
         tick(19, 4)

@@ -1,4 +1,8 @@
-# LIMO: 4개 터미널로 순차 미션 수행
+# LIMO v3: jihyuk 구조 + 3차선 장애물 회피 수정
+
+`jihyuk`을 기준으로 3차선 경로 계획·중앙 복귀·이후 LiDAR 해제 조건만 추가했다.
+콘 구간, 일반 차선 검출 방식, 갈림길 회전 방식은 `jihyuk` 그대로다.
+`v1`의 별도 합류 추적과 지그재그 로직은 포함하지 않는다.
 
 이 패키지는 코스용 초기 구현이다. 실차 실행은 검증하지 않았다.
 미션 순서·표지판 처리, 회피/갈림길/주차 계산을 구현하고 오프라인 테스트했다.
@@ -34,13 +38,15 @@ ros2 run core core.core
 함께 실행하지 않는다. 코어만 `/cmd_vel`을 발행한다. 내부 제어기는
 `/core/control_cmd`, LiDAR 노드는 `/e_stop`과 `/core/emergency_cmd`를 발행한다.
 카메라/차체 입력이나 속도 후보가 끊기면 코어가 정지한다.
-LiDAR 데이터와 LiDAR 정지 heartbeat는 장애물 회피·라바콘 회피에서만 요구한다.
+LiDAR가 켜져 있는 동안에는 스캔과 정지 heartbeat를 계속 요구한다.
 
 ## LiDAR 모터 사용 구간
 
 브링업은 `auto_start: false`로 모터를 정지시킨 채 서비스 요청을 기다린다.
-현재 코드 4번 장애물 회피와 6번 라바콘 회피 미션에서만 모터/스캔을 시작한다.
-나머지 구간은 모터와 스캔을 정지하고 LiDAR 장애물/미관측/비상정지 조건을 주행에 적용하지 않는다.
+4번 장애물 회피와 6번 라바콘 회피 단계에서 모터/스캔을 시작한다.
+3차선 단계가 끝나도 LiDAR를 유지하며, 좌·우 표지판 중 하나가 확인되고 최신 스캔으로
+전방 0.8m·좌우 0.3m에 장애물이 없고 직진 경로가 충분히 관측됐을 때 해제를 허용한다.
+콘 구간은 기존대로 진입 시 켜고, 콘 단계 종료 시 끈다. 종료·고장 정지 때도 모터를 정지한다.
 모터 상태 전환 확인 중에는 차량이 정지한다. 켤 때는 새로운 스캔이 들어와야 회피를 시작한다.
 코어 종료 후 요구 heartbeat가 끊기면 모터를 정지한다.
 드라이버 노드는 재시작 요청을 받기 위해 연결된 대기 상태를 유지하며 전원 자체를 차단하지 않는다.
@@ -56,7 +62,7 @@ LiDAR 데이터와 LiDAR 정지 heartbeat는 장애물 회피·라바콘 회피�
 |1 방지턱 서행|mission_01_slow.py|mission_01_slow.yaml|class 5 확인 → 감속 → 지정 거리·최소 시간 경과 및 표지판 사라짐|
 |2 서행 유도선|mission_02_guide.py|mission_02_guide.yaml|앞 단계 완료 → 저속 차선 추종 → 지정 거리 통과|
 |3 보행자|mission_03_pedestrian.py|mission_03_pedestrian.yaml|class 4 → 정지선 또는 보정 거리에서 정지 → 실제 정지 확인 후 3초 대기 → 발진|
-|4 3차선 장애물|mission_04_obstacle.py|mission_04_obstacle.yaml|3차선 지속 검출 → LiDAR로 가능한 차선 선택 → 최소 거리 주행·1차선 복귀·전방 장애물 없음 지속|
+|4 3차선 장애물|mission_04_obstacle.py|mission_04_obstacle.yaml|3차선 지속 검출 → LiDAR로 가능한 차선 선택 → 최소 거리 주행·중앙 8cm/헤딩 0.12rad 이내·방향 표지판·유효한 전방 비움 1초 확인|
 |5 갈림길|mission_05_intersection.py|mission_05_intersection.yaml|class 2 좌/class 3 우 → 진입 거리·오도메트리 회전각 → 차선 재검출 및 출구 거리|
 |6 라바콘|mission_06_cone.py|mission_06_cone.yaml|class 7 → LiDAR 좌우 사이 통로 추종 → 최소 거리·표지판 및 근거리 통로 장애물 사라짐·차선 재검출 지속|
 |7 횡단보도/신호등|mission_07_traffic.py|mission_07_traffic.yaml|횡단보도 또는 신호등 감지 → class 0 면적 2900px² 이상 즉시 정지 → class 1 면적 2700px² 이상 차선 복귀. 동시 검출은 빨강 우선|
@@ -76,6 +82,9 @@ LiDAR 데이터와 LiDAR 정지 heartbeat는 장애물 회피·라바콘 회피�
 - `config/lane.yaml`: ROI/HLS 색상 필터·카메라→지면 호모그래피.
 - `config/lidar.yaml`: LiDAR/TF frame·스캔 유효성·차체 치수·정지 거리 여유.
 - `../line_slow/detect_line.py`: 차선/3차선/정지선/횡단보도 영상 처리.
+- `../line_slow/lane_change.py`: 도로 방향의 5차식 경로를 오도메트리 좌표에 고정해 추적.
+  차체 전체·도로 경계·장애물·관측 범위·조향 한계를 검사하며 중앙 복귀를 우선한다.
+  최대 계획 범위 2.6m, 회피 속도 상한 0.15m/s.
 - `../line_slow/limo_control.py`: 기존 제어기. `lane_change_curvature`, `cone_curvature`,
   `compute_control` 내 branch 모드, `parking_control`이 실제 조향 계산을 한다.
 - `core/parking_path.py`: T자 주차 경로 생성.
@@ -85,12 +94,31 @@ LiDAR 데이터와 LiDAR 정지 heartbeat는 장애물 회피·라바콘 회피�
 YAML만 수정하면 관련 터미널을 재실행한다. 소스가 있는 이 환경에서는 YAML 재빌드가 필요 없다.
 CLI의 `--ros-args -p 이름:=값` 또는 마지막 `--params-file`은 기본 설정 뒤에 적용된다.
 
+## v3 보정값 입력
+
+두 활성화 플래그는 이미 `true`이므로 다시 바꿀 필요가 없다. 실제 보정값은 만들거나 추정해서 채우지 않았다.
+
+| 파일 | 입력·확인할 보정값 |
+| --- | --- |
+| `src/core/config/lane.yaml` | `ground_homography`: 전체 영상 픽셀 → base_link 지면 [전방 m, 왼쪽 m]의 3×3 행렬 9개를 행 순서로 입력. 소수점 숫자 사용 |
+| 같은 파일 | `calibration_width`, `calibration_height`: 행렬 보정에 사용한 영상 해상도. 기본 640×480 |
+| `src/core/config/control.yaml` | 실측 차체가 기본값과 다르면 `wheelbase`, `rear_axle_offset`, `robot_front`, `robot_rear`, `robot_width`, `max_steering_angle`을 수정 |
+| `src/core/config/lidar.yaml` | 차체 전후 길이·폭은 control.yaml과 일치시킨다. LiDAR 장착 TF가 실제 위치·방향과 맞는지 확인 |
+
+`ground_homography`의 0.0 아홉 개는 입력 위치를 위한 빈 값이다. 그대로 실행해도 노드는 시작하지만,
+보정 안내를 표시하고 미터 단위 장애물 회피는 정지한다. 0 행렬·잘못된 크기·비유한 값은 주행 근거로 사용하지 않는다.
+센서 영상 해상도가 보정 해상도와 다를 때도 지면 좌표를 사용하지 않는다.
+
+값 입력 후 기존 4개 터미널 실행 방법을 그대로 사용한다. Python 변경을 반영하려면 위 빌드 명령을 수행한다.
+소스 설정을 우선 읽는 기본 워크스페이스에서는 YAML만 수정한 경우 관련 노드를 재실행하면 된다.
+설치본만 사용하는 환경이면 YAML 수정 후에도 다시 빌드한다.
+
 ## 실차 보정이 필요한 가정
 
 - 기본 속도는 0.3m/s, 서행은 0.2m/s, 차선 신뢰도가 0.8 미만이면 최대 0.12m/s다.
   커브 감속·가속 제한에 따라 실제 출력은 더 낮아질 수 있다. 주차는 0.05m/s다.
-- `control.yaml`의 `geometry_verified`와 `lane.yaml`의 `ground_calibrated`는 기본 false다.
-  실제 차체 치수와 지면 변환을 측정한 뒤 해당 값을 설정한다. 코드가 임의로 true로 바꾸지 않는다.
+- `control.yaml`의 `geometry_verified`와 `lane.yaml`의 `ground_calibrated`는 요청에 따라 true다.
+  실제 보정이 완료됐다는 의미는 아니며, 아래 보정값을 입력해야 한다.
   호모그래피는 전체 영상 픽셀 [u,v,1]을 base_link 지면 [전방m,왼쪽m,1]로 보낸다.
   `calibration_width/height`는 측정에 쓴 영상 해상도다. 기본 0 행렬은 유효한 보정이 아니다.
 - 방지턱 노면 문구는 YOLO class 5가 검출해야 한다. 별도 OCR은 없다.

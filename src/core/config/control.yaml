@@ -14,7 +14,7 @@ limo_control:
     robot_rear: 0.18
     robot_width: 0.22
     safety_margin: 0.04
-    geometry_verified: false
+    geometry_verified: true
     auto_slow_sign: false
     auto_obstacle_mode: false
     require_ackermann: false

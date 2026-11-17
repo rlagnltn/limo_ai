@@ -106,6 +106,13 @@ class DetectLine(Node):
         self.declare_parameter('ground_homography', [0.0]*9)
         self.declare_parameter('calibration_width', 640)
         self.declare_parameter('calibration_height', 480)
+        matrix = np.asarray(self.get_parameter('ground_homography').value, dtype=float)
+        if (self.get_parameter('ground_calibrated').value and
+                (matrix.size != 9 or not np.isfinite(matrix).all() or
+                 abs(np.linalg.det(matrix.reshape(3, 3))) < 1e-12)):
+            self.get_logger().warning(
+                'Set the measured ground_homography in core/config/lane.yaml. '
+                'Metric lane planning stays stopped until calibration is valid.')
 
         # Parameter For debugging
         # 0: ROI
@@ -233,6 +240,19 @@ class DetectLine(Node):
                 if left_ground[1] > right_ground[1]:
                     state.update(metric_valid=True, ground_centers=ground,
                                  ground_bounds=[left_ground[1], right_ground[1]])
+                    pairs = [[self.ground_point(x0+l, y0+y),
+                              self.ground_point(x0+r, y0+y)] for l, r, y in ordered]
+                    if all(point is not None for pair in pairs for point in pair):
+                        lines = []
+                        for side in (0, 1):
+                            points = np.asarray([pair[side] for pair in pairs])
+                            if np.ptp(points[:, 0]) < 0.1:
+                                break
+                            lines.append(np.polyfit(points[:, 0], points[:, 1], 1).tolist())
+                        if len(lines) == 2:
+                            state['ground_lines'] = lines
+                            state['ground_heading'] = float(np.arctan(
+                                (lines[0][0]+lines[1][0])/2))
             # A continuous transverse white stripe; zebra gaps are not joined.
             stop_rows = []
             for y in range(white.shape[0]):
@@ -251,6 +271,7 @@ class DetectLine(Node):
                     state['stop_distance'] = point[0]
         state['offset'] = int(round(reference_x-cx))
         return state
+
 
     @staticmethod
     def fit_boundary(points, image_width):

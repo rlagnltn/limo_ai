@@ -61,6 +61,7 @@ class Core(Node):
         self.lidar_pending = True
         self.lidar_reason = 'waiting_for_scanner_controller'
         controller.lidar_enabled = self.course.active.name in LIDAR_MISSIONS
+        self.lidar_latched = self.course.active.name == 'obstacle'
         self.lidar_request = self.create_publisher(Bool, '/core/lidar_enabled', 10)
         self.create_subscription(String, '/core/lidar_state', self.on_lidar_state, 10)
         self.publisher = self.create_publisher(Twist, '/cmd_vel', 10)
@@ -101,7 +102,16 @@ class Core(Node):
             self.lidar_actual = None
 
     def update_lidar_request(self):
-        wanted = (self.course.active.name in LIDAR_MISSIONS and not self.course.finished
+        active = self.course.active.name in LIDAR_MISSIONS
+        if self.course.active.name == 'obstacle':
+            self.lidar_latched = True
+        elif self.course.active.name == 'cone':
+            self.lidar_latched = False
+        signs = self.tracker.signs(time.monotonic())
+        if (getattr(self, 'lidar_latched', False) and not active and (2 in signs) != (3 in signs)
+                and Core.lidar_front_clear(self, time.monotonic())):
+            self.lidar_latched = False
+        wanted = ((active or getattr(self, 'lidar_latched', False)) and not self.course.finished
                   and not self.fault and self.get_parameter('enabled').value)
         if wanted != self.controller.lidar_enabled:
             self.controller.lidar_enabled = wanted
@@ -112,6 +122,17 @@ class Core(Node):
                 self.last_estop = -math.inf
         self.lidar_request.publish(Bool(data=wanted))
         return wanted
+
+    def lidar_front_clear(self, now):
+        control = self.controller
+        return (self.lidar_actual is True and not self.lidar_pending
+                and now-self.lidar_state_received <= self.cfg['input_timeout']
+                and not self.estop and now-self.last_estop <= self.cfg['input_timeout']
+                and control.fresh('obstacles', now) and control.fresh('e_stop', now)
+                and control.obstacles.get('valid') is True
+                and not any(0 < x < 0.8 and abs(y) < 0.3
+                            for x, y in control.obstacles.get('points', []))
+                and control.curve_clear(0.0, 0.8))
 
     def dispatch(self, command):
         if command is None:
@@ -149,7 +170,7 @@ class Core(Node):
             'bump_passed_by_odometry': '서행 표지판 사라짐 + 설정 거리/시간 충족',
             'guide_distance_completed': '서행 유도선 설정 거리 통과',
             'pedestrian_stop_and_wait_completed': '보행자 정지 후 대기 완료/발진',
-            'single_lane_exit_confirmed': '최소 거리 주행 + 단일차선 복귀/전방 비움 확인',
+            'direction_sign_and_clear_center_exit': '방향 표지판 + 중앙 정렬/전방 LiDAR 비움 확인',
             'branch_turn_and_lane_reacquired': '갈림길 회전 후 차선 재검출',
             'cone_exit_and_lane_confirmed': '최소 거리 + 라바콘 구간 이탈/차선 확인',
             'green_pixel_threshold_departure': '초록불 면적 기준 충족/차선 추종 복귀',
@@ -227,7 +248,9 @@ class Core(Node):
         if healthy and not self.course.finished:
             obs = Observation(now, control.travel, self.tracker.signs(now), control.lane,
                               tuple(control.obstacles.get('points', [])) if lidar_enabled else (), control.mode,
-                              control.phase, control.odom_speed, control.reason)
+                              control.phase, control.odom_speed, control.reason,
+                              Core.lidar_front_clear(self, now)
+                              if lidar_enabled and self.course.active.name == 'obstacle' else False)
             epoch = self.course.epoch
             result = self.course.tick(obs)
             self.reason = result.reason
