@@ -13,6 +13,7 @@ class Observation:
     phase: str = 'running'
     speed: float = 0.0
     reason: str = ''
+    lidar_clear: bool = False
 
 
 @dataclass

@@ -1,4 +1,4 @@
-"""Start/stop the scanner only while the selected course missions request it."""
+"""Lease scanner motor state; core retains demand until a safe direction-sign release."""
 
 LIDAR_MISSIONS = frozenset({'obstacle', 'cone'})
 

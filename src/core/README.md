@@ -34,13 +34,17 @@ ros2 run core core.core
 함께 실행하지 않는다. 코어만 `/cmd_vel`을 발행한다. 내부 제어기는
 `/core/control_cmd`, LiDAR 노드는 `/e_stop`과 `/core/emergency_cmd`를 발행한다.
 카메라/차체 입력이나 속도 후보가 끊기면 코어가 정지한다.
-LiDAR 데이터와 LiDAR 정지 heartbeat는 장애물 회피·라바콘 회피에서만 요구한다.
+LiDAR가 켜져 있는 동안에는 스캔과 정지 heartbeat를 계속 요구한다.
 
 ## LiDAR 모터 사용 구간
 
 브링업은 `auto_start: false`로 모터를 정지시킨 채 서비스 요청을 기다린다.
-현재 코드 4번 장애물 회피와 6번 라바콘 회피 미션에서만 모터/스캔을 시작한다.
-나머지 구간은 모터와 스캔을 정지하고 LiDAR 장애물/미관측/비상정지 조건을 주행에 적용하지 않는다.
+4번 장애물 회피와 6번 라바콘 회피 단계에 진입하면 모터/스캔을 시작한다.
+3차선 장애물 단계가 끝나도 사용 요구를 유지한다. 이 구간 이후의 해제는 좌·우 표지판 중 하나가 확인되고,
+최신의 유효한 LiDAR로 전방 0.8m·좌우 0.3m에 장애물이 없으며 차량의 직진 경로가
+충분히 관측됐을 때만 허용한다. 좌우 동시 검출·오래된 스캔·미관측 공간은 해제를 허용하지 않는다.
+종료·고장 정지·비활성화 시에는 차량 명령을 차단하고 모터를 정지한다.
+라바콘 구간의 모터 수명주기와 회피 로직은 기존 그대로다. 콘 단계에서는 LiDAR를 켜고, 종료하면 끈다.
 모터 상태 전환 확인 중에는 차량이 정지한다. 켤 때는 새로운 스캔이 들어와야 회피를 시작한다.
 코어 종료 후 요구 heartbeat가 끊기면 모터를 정지한다.
 드라이버 노드는 재시작 요청을 받기 위해 연결된 대기 상태를 유지하며 전원 자체를 차단하지 않는다.
@@ -56,7 +60,7 @@ LiDAR 데이터와 LiDAR 정지 heartbeat는 장애물 회피·라바콘 회피�
 |1 방지턱 서행|mission_01_slow.py|mission_01_slow.yaml|class 5 확인 → 감속 → 지정 거리·최소 시간 경과 및 표지판 사라짐|
 |2 서행 유도선|mission_02_guide.py|mission_02_guide.yaml|앞 단계 완료 → 저속 차선 추종 → 지정 거리 통과|
 |3 보행자|mission_03_pedestrian.py|mission_03_pedestrian.yaml|class 4 → 정지선 또는 보정 거리에서 정지 → 실제 정지 확인 후 3초 대기 → 발진|
-|4 3차선 장애물|mission_04_obstacle.py|mission_04_obstacle.yaml|3차선 지속 검출 → LiDAR로 가능한 차선 선택 → 최소 거리 주행·1차선 복귀·전방 장애물 없음 지속|
+|4 3차선 장애물|mission_04_obstacle.py|mission_04_obstacle.yaml|3차선 지속 검출 → LiDAR로 가능한 차선 선택 → 최소 거리 주행·중앙 8cm/헤딩 0.12rad 이내·방향 표지판·유효한 전방 비움 1초 확인|
 |5 갈림길|mission_05_intersection.py|mission_05_intersection.yaml|class 2 좌/class 3 우 → 진입 거리·오도메트리 회전각 → 차선 재검출 및 출구 거리|
 |6 라바콘|mission_06_cone.py|mission_06_cone.yaml|class 7 → LiDAR 좌우 사이 통로 추종 → 최소 거리·표지판 및 근거리 통로 장애물 사라짐·차선 재검출 지속|
 |7 횡단보도/신호등|mission_07_traffic.py|mission_07_traffic.yaml|횡단보도 또는 신호등 감지 → class 0 면적 2900px² 이상 즉시 정지 → class 1 면적 2700px² 이상 차선 복귀. 동시 검출은 빨강 우선|
@@ -80,6 +84,9 @@ LiDAR 데이터와 LiDAR 정지 heartbeat는 장애물 회피·라바콘 회피�
   경계를 따라가며, 분기를 관측한 뒤 양쪽 경계 폭이 0.5초간 안정된 단일 통로를 확인한다.
   기존 오도메트리 회전각과 최소 출구 거리 조건도 유지한다. 경계 소실 시 정지한다.
   `config/lane.yaml`의 `merge_*` 값으로 보정한다. 지그재그 IMU 로직은 포함하지 않는다.
+- `../line_slow/lane_change.py`: 도로 방향에서 5차식 후보를 계획하고 오도메트리 좌표에 고정해 추적.
+  차체 전체·도로 경계·장애물·관측 범위·조향 한계를 검사하며, 가능한 경우 중앙 복귀를 우선한다.
+  최대 계획 범위는 2.6m, 장애물 회피 속도 상한은 0.15m/s다.
 - `../line_slow/limo_control.py`: 기존 제어기. `lane_change_curvature`, `cone_curvature`,
   `compute_control` 내 branch 모드, `parking_control`이 실제 조향 계산을 한다.
 - `core/parking_path.py`: T자 주차 경로 생성.
@@ -113,7 +120,7 @@ CLI의 `--ros-args -p 이름:=값` 또는 마지막 `--params-file`은 기본 �
   빈 주차 공간의 자동 측정/인식은 없다. `parking_approach/radius/reverse/box`를 실제
   주차 위치에 맞춘다. 우측이 기본이며 좌측은 side와 box의 y 범위를 함께 바꾼다.
   경로는 차량 최소 회전 반경을 검사하고, 전진→후진 전 실제 정지를 확인한다.
-  주차 구간은 사용자 지정에 따라 LiDAR를 사용하지 않으며, 경로·오도메트리·주차 영역 조건으로 제어한다.
+  주차 구간은 기존대로 LiDAR를 사용하지 않으며, 경로·오도메트리·주차 영역 조건으로 제어한다.
 - stage timeout/경로 막힘/센서 문제는 `/core/status`와 `/mission_status`에서 확인한다.
 
 ## 미션 하나만 테스트

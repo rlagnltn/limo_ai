@@ -274,6 +274,19 @@ class DetectLine(Node):
                 if left_ground[1] > right_ground[1]:
                     state.update(metric_valid=True, ground_centers=ground,
                                  ground_bounds=[left_ground[1], right_ground[1]])
+                    pairs = [[self.ground_point(x0+l, y0+y),
+                              self.ground_point(x0+r, y0+y)] for l, r, y in ordered]
+                    if all(point is not None for pair in pairs for point in pair):
+                        lines = []
+                        for side in (0, 1):
+                            points = np.asarray([pair[side] for pair in pairs])
+                            if np.ptp(points[:, 0]) < 0.1:
+                                break
+                            lines.append(np.polyfit(points[:, 0], points[:, 1], 1).tolist())
+                        if len(lines) == 2:
+                            state['ground_lines'] = lines
+                            state['ground_heading'] = float(np.arctan(
+                                (lines[0][0]+lines[1][0])/2))
             # A continuous transverse white stripe; zebra gaps are not joined.
             stop_rows = []
             for y in range(white.shape[0]):

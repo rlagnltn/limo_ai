@@ -24,8 +24,10 @@ from std_msgs.msg import Bool, Int32, String
 from limo_msgs.msg import LimoStatus
 if __package__:
     from .limo_e_stop import clamp, wrap_angle, yaw_of
+    from .lane_change import LaneChangePlanner
 else:
     from limo_e_stop import clamp, wrap_angle, yaw_of
+    from lane_change import LaneChangePlanner
 
 
 def finite_number(value):
@@ -166,6 +168,7 @@ class LimoControl(Node):
         self.slow_sign_used = False
         self.slow_sign_until = None
         self.target_lane = None
+        self.lane_planner = LaneChangePlanner()
         self.multi_frames = 0
         self.command_ids = deque(maxlen=100)
         self.parking_path = []
@@ -177,6 +180,8 @@ class LimoControl(Node):
         self.timer = self.create_timer(0.05, self.timer_callback)
 
     def _enter(self, mode, now):
+        if hasattr(self, 'lane_planner'):
+            self.lane_planner.reset()
         self.slow_sign_until = None
         if mode != 'hold':
             self.hold_reason = ''
@@ -228,6 +233,16 @@ class LimoControl(Node):
             if (not 0 <= finite_number(lane.get('confidence', 0.0)) <= 1 or
                     abs(finite_number(lane.get('heading_error', 0.0))) > 1):
                 raise ValueError('Invalid lane confidence/heading')
+            if 'ground_lines' in lane:
+                lines = lane['ground_lines']
+                if (not isinstance(lines, list) or len(lines) != 2
+                        or any(not isinstance(line, list) or len(line) != 2 for line in lines)):
+                    raise ValueError('Invalid ground boundary lines')
+                for slope, intercept in lines:
+                    if abs(finite_number(slope)) > 2 or abs(finite_number(intercept)) > 5:
+                        raise ValueError('Ground boundary outside planning range')
+                if abs(finite_number(lane['ground_heading'])) > math.pi/3:
+                    raise ValueError('Invalid ground heading')
             for key in ('merge_valid', 'merge_complete'):
                 if key in lane and type(lane[key]) is not bool:
                     raise ValueError('Invalid merge status')
@@ -470,8 +485,14 @@ class LimoControl(Node):
         c, s = math.cos(angle), math.sin(angle)
         if road_bounds is not None:
             for dx, dy in ((front, half), (front, -half), (-rear, half), (-rear, -half)):
+                px = x+c*dx-s*dy
                 py = y+s*dx+c*dy
-                if py > road_bounds[0] or py < road_bounds[1]:
+                if isinstance(road_bounds[0], (list, tuple)):
+                    left = road_bounds[0][0]*px+road_bounds[0][1]
+                    right = road_bounds[1][0]*px+road_bounds[1][1]
+                else:
+                    left, right = road_bounds
+                if py > left or py < right:
                     return False
         if check_coverage:
             origin = self.obstacles.get('sensor_origin', [0.0, 0.0])
@@ -489,59 +510,10 @@ class LimoControl(Node):
                 return False
         return True
 
-    def change_path(self, lateral, length, bounds):
-        """A quintic S-curve settles parallel to the adjacent straight lane."""
-        for index in range(31):
-            u = index/30
-            x = u*length
-            y = lateral*(10*u**3-15*u**4+6*u**5)
-            slope = lateral*(30*u*u-60*u**3+30*u**4)/length
-            second = lateral*(60*u-180*u*u+120*u**3)/(length*length)
-            curvature = second/(1+slope*slope)**1.5
-            if abs(curvature) > self.max_curvature:
-                return False
-            if not self.footprint_clear(x, y, math.atan(slope), road_bounds=bounds,
-                                        check_coverage=index > 2):
-                return False
-        return True
-
     def lane_change_curvature(self, baseline):
-        if (not self.cfg['geometry_verified'] or self.lane.get('metric_valid') is not True or
-                self.lane.get('lane_count') != 3):
+        if not self.cfg['geometry_verified'] or self.lane.get('metric_valid') is not True:
             return None, 'lane_change_needs_calibration'
-        centers = self.lane.get('ground_centers', [])
-        bounds = self.lane.get('ground_bounds')
-        if len(centers) != 3 or not isinstance(bounds, list) or len(bounds) != 2:
-            return None, 'three_lane_geometry_unavailable'
-        bounds = [finite_number(v) for v in bounds]
-        if abs(float(self.lane.get('heading_error', 0.0))) > 0.2:
-            return None, 'three_lane_change_requires_straight_corridor'
-        current = min(range(3), key=lambda i: abs(centers[i][1]))
-        # Hold the selected lane until it has been reached; avoid frame-to-frame toggling.
-        choices = [self.target_lane] if self.target_lane is not None else [current, current-1, current+1]
-        candidates = []
-        for i in choices:
-            if i is None or not 0 <= i < 3:
-                continue
-            _, y = centers[i]
-            length = max(self.cfg['lane_change_distance'], abs(y)*2.5)
-            look = min(self.cfg['lookahead'], length)
-            u = look/length
-            target_y = y*(10*u**3-15*u**4+6*u**5)
-            x = look+self.cfg['rear_axle_offset']
-            k = 2*target_y/(x*x+target_y*target_y)
-            if abs(k) > self.max_curvature:
-                continue
-            if self.change_path(y, length, bounds):
-                candidates.append((abs(i-current)*0.5+abs(k-baseline)*0.1, i, k))
-        if not candidates:
-            self.target_lane = None
-            return None, 'no_clear_lane_change_path'
-        _, selected, curvature = min(candidates)
-        self.target_lane = selected
-        if selected == current and abs(centers[selected][1]) < 0.06:
-            self.target_lane = None
-        return curvature, 'tracking_lane_%d' % selected
+        return self.lane_planner.command(self)
 
     def cone_curvature(self):
         # This mode is explicitly armed: objects bounding the gap are assumed cones.
@@ -768,13 +740,9 @@ class LimoControl(Node):
         if self.mode == 'obstacles':
             curvature, reason = self.lane_change_curvature(baseline)
             if curvature is None:
-                # Until calibrated, keep the current lane only if the full path is clear.
-                if self.lane.get('lane_count') == 1 and self.curve_clear(baseline, self.cfg['lookahead']):
-                    self._enter('follow', now)
-                else:
-                    return 0.0, 0.0, reason
+                return 0.0, 0.0, reason
             else:
-                return min(speed, self.cfg['slow_speed']), curvature, reason
+                return min(speed, self.cfg['slow_speed'], 0.15), curvature, reason
         return speed, baseline, 'lane_follow'
 
     def publish_motion(self, speed, curvature):
