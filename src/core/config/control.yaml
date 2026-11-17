@@ -8,7 +8,8 @@ limo_control:
     d_gain: 0.0002
     heading_gain: 0.25
     wheelbase: 0.2
-    max_steering_angle: 0.35
+    # Supplied existing virtual bicycle centre-angle limit (rad).
+    max_steering_angle: 0.40
     rear_axle_offset: 0.1
     robot_front: 0.18
     robot_rear: 0.18

@@ -14,8 +14,12 @@ detect_line:
     reference_distance: 0
     ground_calibrated: true
     # Maps FULL IMAGE pixel coordinates to base_link ground [forward,left] metres.
-    # Replace all 9 entries with the measured row-major 3x3 matrix (use decimals).
-    # Zero placeholders deliberately keep metric planning stopped, not calibrated.
-    ground_homography: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    # Supplied 2026-11-16 depth-plane calibration; same camera/mount/stream required.
+    # Older marker points differ by RMS 0.324873 m; absolute XY accuracy unverified.
+    ground_homography: [
+      0.000003955465311482551, 0.000089359236285910254, -0.43970475044753632,
+      0.00086381604398160373, 0.000037455805254995313, -0.27906861580161868,
+      -0.00011423569027318951, -0.0047786373085280127, 1.0
+    ]
     calibration_width: 640
     calibration_height: 480
