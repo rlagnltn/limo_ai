@@ -7,6 +7,6 @@ limo_e_stop:
     robot_rear: 0.18
     robot_width: 0.22
     max_speed: 0.3
-    safety_margin: 0.04
+    safety_margin: 0.0
     inf_is_free: false
     clear_scans: 3
