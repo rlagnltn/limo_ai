@@ -22,7 +22,7 @@
 
 # 각 미션에 대해서 개별적으로 테스트할때는
 
-#ros2 run core mission_번호_미션이름
+#ros2 run core mission_미션번호_미션이름
 
 # 전체 진행할때는
 
