@@ -1,5 +1,6 @@
 """Order and lifecycle. No mission can start another mission or write motors."""
 from .missions.base import Result, validate_config
+from dataclasses import replace
 from .missions import (mission_01_slow, mission_02_guide, mission_03_pedestrian,
                        mission_04_obstacle, mission_05_intersection, mission_06_cone,
                        mission_07_traffic, mission_08_parking)
@@ -26,6 +27,7 @@ class Course:
         self.epoch = 0
         self.end_index = config.get('end_stage', 8)-1
         self.events = []
+        self.handoff_signs = frozenset()
         self.results = [dict(stage=i+1, mission=m.name, title=TITLES[i],
                              state='pending', reason='', distance_m=0.0, elapsed_sec=0.0)
                         for i, m in enumerate(self.missions)]
@@ -43,8 +45,7 @@ class Course:
         return [dict(item) for item in self.results]
 
     def progress(self, obs):
-        targets = dict(slow='slow_distance', guide='guide_distance',
-                       obstacle='obstacle_min_distance', cone='cone_min_distance')
+        targets = dict(slow='slow_distance', guide='guide_distance')
         key = targets.get(self.active.name)
         return dict(distance_m=round(self.active.distance(obs), 3) if self.entered else 0.0,
                     target_distance_m=self.active.cfg.get(key) if key else None,
@@ -59,7 +60,9 @@ class Course:
             return Result({'mode': 'hold'}, reason=self.fault or 'course_complete')
         if not self.entered:
             self.entered = True
-            result = self.active.enter(obs)
+            entry_obs = replace(obs, signs=self.handoff_signs) if self.handoff_signs else obs
+            self.handoff_signs = frozenset()
+            result = self.active.enter(entry_obs)
             self.record('waiting' if self.active.phase == 'waiting' else 'active',
                         result.reason or self.active.phase, obs)
             return result
@@ -70,6 +73,7 @@ class Course:
             self.record('failed', result.fault, obs)
             return Result({'mode': 'hold'}, fault=result.fault)
         if result.done:
+            self.handoff_signs = result.handoff_signs
             self.record('completed', result.reason, obs)
             if self.index == self.end_index:
                 self.finished = True

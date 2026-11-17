@@ -31,49 +31,68 @@ class CourseTests(unittest.TestCase):
 
     def test_full_course_replay(self):
         c = Course(config())
-        valid = dict(valid=True, lane_count=1)
-        def tick(t, distance=0, signs=(), mode='follow', phase='running', lane=None):
-            return c.tick(Observation(t, distance, frozenset(signs), valid if lane is None else lane,
-                                      (), mode, phase))
+        def tick(t, distance=0, signs=(), mode='follow', phase='running', count=0):
+            return c.tick(Observation(t, distance, frozenset(signs),
+                                      dict(valid=True, lane_count=1), (), mode, phase,
+                                      speed=.2 if mode == 'follow' else 0., large_cone_count=count))
         tick(0)
         self.assertEqual(tick(1, signs=[5]).command['mode'], 'slow')
         tick(3, .7, mode='slow')
-        self.assertTrue(tick(3.6, .7, mode='slow').done)
-        self.assertEqual(c.active.name, 'guide')
-        self.assertEqual(tick(4, .7).command['mode'], 'slow')
-        self.assertTrue(tick(5, 1.6, mode='slow').done)
-        tick(6, 1.6)
-        self.assertEqual(tick(7, 1.6, signs=[4]).command['mode'], 'pedestrian')
-        tick(8, 2, mode='pedestrian', phase='waiting')
-        self.assertTrue(tick(11, 2).done)
-        tick(12, 2)
-        tick(13, 2, lane=dict(valid=True, lane_count=3))
-        self.assertEqual(tick(13.5, 2, lane=dict(valid=True, lane_count=3)).command['mode'], 'obstacles')
-        tick(15, 3.1, mode='obstacles')
-        self.assertTrue(tick(16.1, 3.1, mode='obstacles').done)
-        tick(17, 3.1)
-        self.assertEqual(tick(18, 3.1, signs=[2]).command['mode'], 'branch_a')
-        tick(19, 4)
-        self.assertTrue(tick(19.6, 4).done)
-        tick(20, 4)
-        self.assertEqual(tick(21, 4, signs=[7]).command['mode'], 'cones')
-        self.assertEqual(tick(23, 5.3, mode='cones').command['mode'], 'hold')
-        self.assertTrue(tick(24.1, 5.3, mode='hold').done)
-        tick(25, 5.3)
-        self.assertEqual(tick(26, 5.3, signs=[0]).command['mode'], 'hold')
-        self.assertEqual(tick(27, 5.8, signs=[0, 1], mode='hold').command['mode'], 'hold')
-        self.assertTrue(tick(28, 5.8, signs=[1], mode='hold').done)
-        tick(30, 5.8)
-        parking = tick(31, 5.8, signs=[6]).command
-        self.assertEqual(parking['mode'], 'parking')
-        self.assertGreater(len(parking['path']), 2)
-        self.assertTrue(tick(35, 7, mode='parking', phase='complete').done)
+        self.assertFalse(tick(5.99, .7, mode='slow').done)
+        self.assertTrue(tick(6, .7, mode='slow').done)
+        self.assertEqual(tick(7, .7).command['mode'], 'follow')
+        self.assertEqual(tick(8, 1., signs=[5]).command['mode'], 'slow')
+        self.assertFalse(tick(9, 2.79, mode='slow').done)
+        self.assertTrue(tick(10, 2.81, mode='slow').done)
+        tick(11, 2.81)
+        self.assertEqual(tick(12, 2.81, signs=[4]).command,
+                         {'mode': 'pedestrian', 'immediate_stop': True})
+        tick(13, 2.81, mode='pedestrian', phase='waiting')
+        self.assertFalse(tick(16, 2.81).done)
+        self.assertFalse(tick(35.99, 4).done)
+        self.assertTrue(tick(36, 4).done)
+        self.assertEqual(tick(37, 4).command['mode'], 'obstacles')
+        self.assertFalse(tick(38, 50, mode='obstacles').done)
+        self.assertTrue(tick(39, 50, signs=[2], mode='obstacles').done)
+        self.assertEqual(tick(40, 50, mode='hold').command['mode'], 'branch_a')
+        self.assertFalse(tick(41, 51, count=5).done)
+        self.assertFalse(tick(60.99, 55, count=5).done)
+        self.assertFalse(tick(61, 55, count=4).done)
+        self.assertTrue(tick(62, 55, count=5).done)
+        self.assertEqual(tick(63, 55).command['mode'], 'cones')
+        self.assertFalse(tick(64, 55, mode='cones', phase='cone_left').done)
+        for step in range(21):
+            result = tick(65+step*.05, 55, mode='cones', phase='cone_acquire')
+        self.assertTrue(result.done)
+        tick(66, 56.3)
+        self.assertEqual(tick(67, 56.3, signs=[0]).command['mode'], 'hold')
+        self.assertFalse(tick(68, 56.3, signs=[0, 1], mode='hold').done)
+        self.assertTrue(tick(69, 56.3, signs=[1], mode='hold').done)
+        tick(70, 56.3)
+        self.assertEqual(tick(71, 56.3, signs=[6]).command['mode'], 'parking')
+        self.assertTrue(tick(72, 57, mode='parking', phase='complete').done)
         self.assertTrue(c.finished)
-        self.assertEqual(tick(36, 7).command['mode'], 'hold')
         self.assertEqual([row['state'] for row in c.summary()], ['completed']*8)
         self.assertEqual(len([e for e in c.events if e['state']=='completed']), 8)
-        self.assertEqual(c.results[0]['reason'], 'bump_passed_by_odometry')
-        self.assertEqual(c.results[7]['reason'], 't_parking_completed')
+
+    def test_cone_requires_completed_manoeuvre_stop_and_continuous_lane_acquisition(self):
+        c = Course(config())
+        c.index = 5
+        self.assertEqual(c.tick(Observation(0)).command, {'mode': 'cones'})
+        def observe(now, phase='cone_acquire', valid=True, speed=0.):
+            return c.tick(Observation(now, signs=frozenset({7}), lane={'valid': valid},
+                                      mode='cones', phase=phase, speed=speed))
+        self.assertFalse(observe(.1, phase='cone_right').done)
+        self.assertFalse(observe(.2, phase='cone_left').done)
+        self.assertFalse(observe(.3, speed=.1).done)
+        for step in range(10):
+            self.assertFalse(observe(.4+step*.05).done)
+        self.assertFalse(observe(.9, valid=False).done)
+        for step in range(21):
+            result = observe(1.+step*.05)
+        self.assertTrue(result.done)
+        self.assertEqual(result.command, {'mode': 'follow'})
+        self.assertEqual(c.active.name, 'traffic')
 
     def test_traffic_green_cannot_bypass_physical_stop(self):
         c = Course(config())
@@ -84,6 +103,36 @@ class CourseTests(unittest.TestCase):
         r = c.tick(Observation(2, signs=frozenset({1}), mode='hold', speed=.1))
         self.assertEqual(r.command, {'mode': 'hold'})
         self.assertFalse(r.done)
+
+    def test_branch_requires_twenty_seconds_moving_and_five_large_cones(self):
+        c = Course(config())
+        c.index = 4
+        c.tick(Observation(0))
+        c.tick(Observation(1, signs=frozenset({2})))
+        def observe(now, speed=.2, count=5):
+            return c.tick(Observation(now, lane={'valid': True}, speed=speed, large_cone_count=count))
+        self.assertFalse(observe(2).done)
+        self.assertFalse(observe(21.99).done)
+        self.assertFalse(observe(22, count=4).done)
+        self.assertFalse(observe(23, speed=0).done)
+        self.assertFalse(observe(24).done)
+        self.assertFalse(observe(43.99).done)
+        self.assertTrue(observe(44).done)
+
+    def test_pedestrian_follow_delay_then_obstacle_entry_without_three_lanes(self):
+        c = Course(config())
+        c.index = 2
+        c.tick(Observation(0))
+        c.tick(Observation(1, signs=frozenset({4})))
+        c.tick(Observation(2, mode='pedestrian', phase='waiting'))
+        self.assertFalse(c.tick(Observation(5, mode='follow')).done)
+        self.assertFalse(c.tick(Observation(24.99, mode='follow')).done)
+        self.assertEqual(c.active.name, 'pedestrian')
+        self.assertTrue(c.tick(Observation(25, mode='follow')).done)
+        self.assertEqual(c.active.name, 'obstacle')
+        result = c.tick(Observation(25.05, lane={'valid': True, 'lane_count': 1}))
+        self.assertEqual(result.command, {'mode': 'obstacles'})
+        self.assertEqual(c.active.phase, 'avoiding')
 
     def test_direction_conflict_waits_then_chooses_right(self):
         c = Course(config())
@@ -96,20 +145,30 @@ class CourseTests(unittest.TestCase):
         c = Course(config(end_stage=2))
         c.index = 1
         c.tick(Observation(0))
-        c.tick(Observation(1, travel=1))
+        c.tick(Observation(.5, signs=frozenset({5})))
+        c.tick(Observation(1, travel=1.81))
         self.assertTrue(c.finished)
         self.assertEqual(c.index, 1)
 
-    def test_exit_timeout_latches_hold(self):
-        c = Course(config(obstacle_max_distance=2.0))
+    def test_guide_waits_for_own_sign_and_counts_distance_from_trigger(self):
+        c = Course(config())
+        c.index = 1
+        self.assertEqual(c.tick(Observation(0)).command, {'mode': 'follow'})
+        self.assertFalse(c.tick(Observation(1, travel=2)).done)
+        self.assertIsNone(c.tick(Observation(2, travel=3, signs=frozenset({4}))).command)
+        result = c.tick(Observation(3, travel=4, signs=frozenset({5})))
+        self.assertEqual(result.command, {'mode': 'slow'})
+        self.assertFalse(c.tick(Observation(4, travel=4.7)).done)
+        self.assertTrue(c.tick(Observation(5, travel=5.81)).done)
+
+    def test_obstacle_exits_only_on_direction_and_hands_it_over(self):
+        c = Course(config())
         c.index = 3
         c.tick(Observation(0))
-        c.tick(Observation(1, lane={'lane_count': 3}))
-        c.tick(Observation(2, lane={'lane_count': 3}))
-        self.assertTrue(c.tick(Observation(3, travel=3)).fault)
-        self.assertEqual(c.tick(Observation(4)).command['mode'], 'hold')
-        self.assertEqual(c.results[3]['state'], 'failed')
-        self.assertEqual(len([e for e in c.events if e['state']=='failed']), 1)
+        self.assertFalse(c.tick(Observation(3, travel=30, lane={'valid': True, 'lane_count': 1})).done)
+        self.assertEqual(c.tick(Observation(4, signs=frozenset({2, 3}))).command, {'mode': 'hold'})
+        self.assertTrue(c.tick(Observation(5, signs=frozenset({3}))).done)
+        self.assertEqual(c.tick(Observation(6)).command, {'mode': 'branch_b'})
 
     def test_pending_missions_are_not_reported_as_successful(self):
         c = Course(config())
@@ -125,6 +184,17 @@ class CourseTests(unittest.TestCase):
 
 
 class DetectionTests(unittest.TestCase):
+    def test_count_three_simultaneous_large_cones(self):
+        tracker = SignTracker(.7, [1800.]*8, 3)
+        def box(area, confidence=.9, name='traffic_cone'):
+            return SimpleNamespace(class_name=name, probability=confidence,
+                                   xmin=0, ymin=0, xmax=1, ymax=area)
+        tracker.update([box(8000), box(9000), box(8000), box(7999),
+                        box(9000, .6), box(9000, name='parking_sign')], 0)
+        self.assertEqual(tracker.large_cone_count, 3)
+        tracker.update([], .1)
+        self.assertEqual(tracker.large_cone_count, 0)
+
     def test_exact_pixel_area_thresholds_for_all_classes(self):
         areas = [2900., 2700., 1800., 1800., 1800., 1800., 1800., 1800.]
         for identifier, area in enumerate(areas):

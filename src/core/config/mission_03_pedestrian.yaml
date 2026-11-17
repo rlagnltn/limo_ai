@@ -1,7 +1,8 @@
 core:
   ros__parameters:
-    # Fallback distance after sign confirmation if no calibrated stop line is available.
-    pedestrian_stop_distance: 0.45
+    # Legacy distance parameter; pedestrian mission now requests immediate stopping.
+    pedestrian_stop_distance: 0.0
+    pedestrian_follow_seconds: 20.0
 limo_control:
   ros__parameters:
     pedestrian_wait: 3.0

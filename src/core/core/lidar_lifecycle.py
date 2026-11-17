@@ -1,6 +1,6 @@
 """Start/stop the scanner only while the selected course missions request it."""
 
-LIDAR_MISSIONS = frozenset({'obstacle', 'cone'})
+LIDAR_MISSIONS = frozenset({'obstacle'})
 
 
 class ScanLease:

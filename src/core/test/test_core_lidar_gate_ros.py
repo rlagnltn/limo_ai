@@ -32,7 +32,8 @@ class CoreLidarGateTests(unittest.TestCase):
         course = Course(cfg)
         course.index = 1
         course.tick(Observation(0))
-        course.tick(Observation(2, travel=1.))
+        course.tick(Observation(1, signs=frozenset({5})))
+        course.tick(Observation(2, travel=1.81))
         messages, logs = [], []
         with tempfile.TemporaryDirectory() as directory:
             path = str(Path(directory)/'events.jsonl')
@@ -44,8 +45,8 @@ class CoreLidarGateTests(unittest.TestCase):
             Core.report_mission_events(h)
             Core.report_mission_events(h)
             saved = [json.loads(line) for line in Path(path).read_text().splitlines()]
-        self.assertEqual(len(saved), 2)
-        self.assertEqual(len(messages), 2)
+        self.assertEqual(len(saved), 3)
+        self.assertEqual(len(messages), 3)
         self.assertEqual(saved[-1]['state'], 'completed')
         self.assertEqual(saved[-1]['reason'], 'guide_distance_completed')
         self.assertIn('완료 판정', logs[-1])
@@ -55,7 +56,7 @@ class CoreLidarGateTests(unittest.TestCase):
         output, requests, status = [], [], []
         control = SimpleNamespace(
             cfg=dict(command_control_mode=1, require_ackermann=False),
-            lidar_enabled=mission in ('obstacle','cone'), received={},
+            lidar_enabled=mission == 'obstacle', received={},
             fresh=lambda key, now: key not in ('obstacles','e_stop'),
             vehicle_ok=True, odom_fault=False, vehicle_control_mode=1,
             mode='follow', phase='running', reason='lane_follow',
@@ -83,14 +84,14 @@ class CoreLidarGateTests(unittest.TestCase):
         return h, output, requests
 
     def test_non_lidar_missions_drive_without_scan_or_estop_heartbeat(self):
-        for mission in ('slow','guide','pedestrian','intersection','traffic','parking'):
+        for mission in ('slow','guide','pedestrian','intersection','cone','traffic','parking'):
             h, output, requests = self.harness(mission, False)
             Core.tick(h)
             self.assertGreater(output[-1].linear.x, 0, mission)
             self.assertFalse(requests[-1].data, mission)
 
     def test_lidar_missions_wait_for_motor_and_new_scan(self):
-        for mission in ('obstacle','cone'):
+        for mission in ('obstacle',):
             h, output, requests = self.harness(mission, False)
             Core.tick(h)
             self.assertEqual(output[-1].linear.x, 0)
@@ -112,6 +113,17 @@ class CoreLidarGateTests(unittest.TestCase):
         h.lidar_actual = False
         Core.tick(h)
         self.assertGreater(output[-1].linear.x, 0)
+
+    def test_cone_clock_receives_final_core_output_including_blocked_stop(self):
+        h, output, _ = self.harness('cone', False)
+        recorded = []
+        h.controller.record_cone_output = lambda now, command: recorded.append(command.linear.x)
+        Core.tick(h)
+        self.assertGreater(recorded[-1], 0.)
+        h.last_boxes = -float('inf')
+        Core.tick(h)
+        self.assertEqual(recorded[-1], 0.)
+        self.assertEqual(recorded[-1], output[-1].linear.x)
 
 
 if __name__ == '__main__':

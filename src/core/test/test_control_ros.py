@@ -15,6 +15,67 @@ from std_msgs.msg import String
 
 
 class ControllerTests(unittest.TestCase):
+    def cone_harness(self):
+        h = SimpleNamespace(mode='cones', phase='cone_right', cone_segment_elapsed=0.,
+                            cone_output_time=None, cone_output_phase=None, cone_output_active=False,
+                            vehicle_motion_mode=1, cfg=dict(cone_right_degrees=10., cone_left_degrees=15.,
+                            cone_right_seconds=2., cone_left_seconds=2., cone_speed=.3, wheelbase=.2))
+        return h
+
+    def test_forced_cone_angles_and_two_timed_segments_then_stop(self):
+        from geometry_msgs.msg import Twist
+        h = self.cone_harness()
+        now = 0.
+        for phase, expected_degrees in (('cone_right', -10.), ('cone_left', 15.)):
+            self.assertEqual(h.phase, phase)
+            for step in range(42):
+                speed, curvature, reason = LimoControl.forced_cone_control(h)
+                if reason != phase:
+                    break
+                self.assertAlmostEqual(speed, .3)
+                self.assertAlmostEqual(math.degrees(math.atan(curvature*.2)), expected_degrees)
+                command = Twist()
+                command.linear.x, command.angular.z = speed, speed*curvature
+                LimoControl.record_cone_output(h, now, command)
+                now += .05
+            else:
+                self.fail('Cone segment did not finish after two seconds of issued output')
+            if phase == 'cone_right':
+                self.assertEqual(h.phase, 'cone_left')
+        self.assertEqual(h.phase, 'cone_acquire')
+        self.assertEqual(LimoControl.forced_cone_control(h)[:2], (0., 0.))
+
+    def test_forced_cone_does_not_count_core_blocks_or_wrong_steering(self):
+        from geometry_msgs.msg import Twist
+        h = self.cone_harness()
+        zero = Twist()
+        for step in range(100):
+            LimoControl.record_cone_output(h, step*.05, zero)
+        self.assertEqual(h.cone_segment_elapsed, 0.)
+        wrong = Twist()
+        wrong.linear.x = .3
+        LimoControl.record_cone_output(h, 5., wrong)
+        LimoControl.record_cone_output(h, 5.05, wrong)
+        self.assertEqual(h.cone_segment_elapsed, 0.)
+        self.assertEqual(LimoControl.forced_cone_control(h)[2], 'cone_right')
+        h.vehicle_motion_mode = 0
+        self.assertEqual(LimoControl.forced_cone_control(h)[0], 0.)
+
+    def test_forced_cone_drives_without_scan_or_lane_detection_but_requires_fresh_camera(self):
+        h = self.cone_harness()
+        h.cfg.update(command_control_mode=1, command_mode_settle=.2, lap_timeout=600.)
+        h.vehicle_control_mode, h.command_ready_since = 1, 0.
+        h.lidar_enabled, h.e_stop_flag = False, True
+        h.vehicle_ok, h.odom_fault, h.started_at = True, False, None
+        h.travel, h.phase_travel, h.mission_distance = 0., 0., None
+        h.lane = {'valid': False}
+        h.fresh = lambda key, now: key not in ('obstacles', 'e_stop')
+        h.get_parameter = lambda name: SimpleNamespace(value=True)
+        h.forced_cone_control = lambda: LimoControl.forced_cone_control(h)
+        self.assertEqual(LimoControl.compute_control(h, 10., .05)[0], .3)
+        h.fresh = lambda key, now: key != 'lane'
+        self.assertEqual(LimoControl.compute_control(h, 10., .05)[0], 0.)
+
     def test_odometry_stop_accepts_unverified_camera_geometry_but_requires_odometry(self):
         for fresh in (True, False):
             warnings = []
@@ -50,6 +111,13 @@ class ControllerTests(unittest.TestCase):
                             fresh=lambda key, now: True, steering_curvature=lambda *args: 0.)
         h._enter = lambda mode, now: LimoControl._enter(h,mode,now)
         h.compute_control = lambda now, dt: LimoControl.compute_control(h,now,dt)
+        h.immediate_stop = True
+        h.stop_target = None
+        h.odom_speed = .2
+        self.assertEqual(h.compute_control(9.,.05)[0], 0.)
+        self.assertIsNone(h.stopped_at)
+        h.travel = .52  # Braking travel must not cause a distance-target overshoot.
+        h.odom_speed = 0.
         self.assertEqual(h.compute_control(10.,.05)[0], 0.)
         self.assertEqual(h.compute_control(10.21,.05)[0], 0.)
         self.assertEqual(h.phase,'waiting')
@@ -59,7 +127,7 @@ class ControllerTests(unittest.TestCase):
 
     def test_requested_cruise_slow_and_low_confidence_speeds(self):
         cfg = dict(command_control_mode=1, command_mode_settle=.2, lap_timeout=600.,
-                   default_speed=.3, max_speed=.3, uncertain_speed=.12,
+                   default_speed=.8, max_speed=.8, uncertain_speed=.2,
                    slow_speed=.2, auto_obstacle_mode=False)
         h = SimpleNamespace(cfg=cfg, mode='follow', phase='running', phase_travel=0.,
                             travel=0., vehicle_control_mode=1, command_ready_since=0.,
@@ -70,10 +138,22 @@ class ControllerTests(unittest.TestCase):
                             get_parameter=lambda name: SimpleNamespace(value=True),
                             fresh=lambda key, now: True,
                             steering_curvature=lambda *args: 0.)
-        for mode, confidence, expected in (('follow',1.,.3), ('slow',1.,.2),
-                                            ('follow',.7,.12), ('slow',.7,.12)):
+        for mode, confidence, expected in (('follow',1.,.8), ('slow',1.,.2),
+                                            ('follow',.7,.2), ('slow',.7,.2)):
             h.mode, h.lane['confidence'] = mode, confidence
             self.assertAlmostEqual(LimoControl.compute_control(h, 10., .05)[0], expected)
+        # High curvature still slows normal tracking but must not lower slow mode.
+        h.steering_curvature = lambda *args: 2.
+        h.mode, h.lane['confidence'] = 'follow', 1.
+        self.assertAlmostEqual(LimoControl.compute_control(h, 10., .05)[0], .8/2.8)
+        h.mode, h.lane['confidence'] = 'slow', .7
+        self.assertAlmostEqual(LimoControl.compute_control(h, 10., .05)[0], .2)
+        # Fixed slow setpoint must not bypass stale-camera or vehicle-fault stops.
+        h.fresh = lambda key, now: key != 'lane'
+        self.assertEqual(LimoControl.compute_control(h, 10., .05)[0], 0.)
+        h.fresh = lambda key, now: True
+        h.vehicle_ok = False
+        self.assertEqual(LimoControl.compute_control(h, 10., .05)[0], 0.)
 
     def test_lidar_disabled_does_not_require_scan_or_lidar_stop_heartbeat(self):
         cfg = dict(command_control_mode=1, command_mode_settle=.2, lap_timeout=600.,

@@ -27,11 +27,13 @@ class SignTracker:
         self.counts = {}
         self.visible = frozenset()
         self.received = -math.inf
+        self.large_cone_count = 0
 
     def update(self, boxes, now):
         if now-self.received > self.timeout:
             self.counts = {}
         seen = set()
+        self.large_cone_count = 0
         for box in boxes:
             identifier = class_id(box.class_name)
             width, height = box.xmax-box.xmin, box.ymax-box.ymin
@@ -39,6 +41,8 @@ class SignTracker:
                     and box.probability >= self.confidence and width > 0 and height > 0
                     and width*height >= self.areas[identifier]):
                 seen.add(identifier)
+                if identifier == 7 and width*height >= 8000:
+                    self.large_cone_count += 1
         self.counts = {key: min(self.confirm_frames, self.counts.get(key, 0)+1) for key in seen}
         # A red observation inhibits departure immediately; green needs confirmation.
         self.visible = frozenset(k for k, count in self.counts.items()

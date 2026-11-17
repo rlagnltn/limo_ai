@@ -1,7 +1,7 @@
 from .base import Mission, Result
 
 
-DEFAULTS = dict(slow_distance=0.6, slow_min_seconds=2.0, slow_sign_absence=0.5)
+DEFAULTS = dict(slow_distance=0.6, slow_min_seconds=5.0, slow_sign_absence=0.5)
 
 
 class SlowMission(Mission):

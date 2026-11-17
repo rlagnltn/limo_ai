@@ -148,10 +148,10 @@ class Core(Node):
         reasons = {
             'bump_passed_by_odometry': '서행 표지판 사라짐 + 설정 거리/시간 충족',
             'guide_distance_completed': '서행 유도선 설정 거리 통과',
-            'pedestrian_stop_and_wait_completed': '보행자 정지 후 대기 완료/발진',
-            'single_lane_exit_confirmed': '최소 거리 주행 + 단일차선 복귀/전방 비움 확인',
-            'branch_turn_and_lane_reacquired': '갈림길 회전 후 차선 재검출',
-            'cone_exit_and_lane_confirmed': '최소 거리 + 라바콘 구간 이탈/차선 확인',
+            'pedestrian_stop_and_wait_completed': '보행자 정지·3초 대기 후 차선 추종 20초 완료',
+            'direction_sign_obstacle_exit': '갈림길 표지판 확인·장애물 미션 종료·방향 전달',
+            'branch_turn_and_lane_reacquired': '갈림길 후 차선 추종 20초 연속 이동·대형 라바콘 5개 확인',
+            'cone_exit_and_lane_confirmed': '고정 조향 완료·정지 후 차선 획득 1초 확인',
             'green_pixel_threshold_departure': '초록불 면적 기준 충족/차선 추종 복귀',
             't_parking_completed': '주차 경로/영역/자세/정지 조건 충족',
         }
@@ -227,7 +227,8 @@ class Core(Node):
         if healthy and not self.course.finished:
             obs = Observation(now, control.travel, self.tracker.signs(now), control.lane,
                               tuple(control.obstacles.get('points', [])) if lidar_enabled else (), control.mode,
-                              control.phase, control.odom_speed, control.reason)
+                              control.phase, control.odom_speed, control.reason,
+                              large_cone_count=getattr(self.tracker, 'large_cone_count', 0))
             epoch = self.course.epoch
             result = self.course.tick(obs)
             self.reason = result.reason
@@ -253,6 +254,8 @@ class Core(Node):
                 and all(math.isfinite(v) for v in (self.command.linear.x, self.command.angular.z))):
             output = self.command
         self.publisher.publish(output)
+        if hasattr(control, 'record_cone_output'):
+            control.record_cone_output(now, output)
         progress = self.course.progress(Observation(now, control.travel)) if hasattr(self.course, 'progress') else {}
         self.status.publish(String(data=json.dumps(dict(
             stage=self.course.index+1, mission=self.course.active.name,

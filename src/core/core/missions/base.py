@@ -13,6 +13,7 @@ class Observation:
     phase: str = 'running'
     speed: float = 0.0
     reason: str = ''
+    large_cone_count: int = 0
 
 
 @dataclass
@@ -21,6 +22,7 @@ class Result:
     done: bool = False
     reason: str = ''
     fault: str = ''
+    handoff_signs: frozenset = frozenset()
 
 
 class Mission:

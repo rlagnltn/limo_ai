@@ -1,4 +1,5 @@
 core:
   ros__parameters:
-    # No separate guide-line YOLO class: slow lane following for this odometry distance.
-    guide_distance: 0.8
+    # Start on confirmed class 5 (shared course area/confidence thresholds).
+    # Measure slow lane-following distance from that detection, not stage entry.
+    guide_distance: 1.8

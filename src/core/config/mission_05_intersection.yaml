@@ -1,6 +1,7 @@
 core:
   ros__parameters:
-    branch_exit_confirm: 0.5
+    branch_exit_confirm: 20.0
+    branch_cone_count: 5
 limo_control:
   ros__parameters:
     # Class 2 = left, class 3 = right. Heading change is measured using odometry.
