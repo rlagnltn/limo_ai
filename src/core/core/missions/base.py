@@ -48,10 +48,6 @@ class Mission:
             self.clear_since = now
         return now-self.clear_since >= seconds
 
-    @staticmethod
-    def front_clear(obs, limit):
-        return not any(0 < x < limit and abs(y) < 0.3 for x, y in obs.points)
-
     def stop_command(self, obs, mode, fallback):
         if obs.lane.get('metric_valid') and obs.lane.get('stop_distance') is not None:
             return {'mode': mode}

@@ -45,7 +45,9 @@ LiDAR가 켜져 있는 동안에는 스캔과 정지 heartbeat를 계속 요구�
 브링업은 `auto_start: false`로 모터를 정지시킨 채 서비스 요청을 기다린다.
 4번 장애물 회피와 6번 라바콘 회피 단계에서 모터/스캔을 시작한다.
 3차선 단계가 끝나도 LiDAR를 유지하며, 좌·우 표지판 중 하나가 확인되고 최신 스캔으로
-전방 0.8m·좌우 0.3m에 장애물이 없고 직진 경로가 충분히 관측됐을 때 해제를 허용한다.
+전방 0.8m의 실제 차체 직진 경로가 비어 있고 충분히 관측됐을 때 해제를 허용한다.
+좌우 ±0.3m 전체가 비어 있어야 한다는 조건은 사용하지 않는다. 경로 밖의 측면 벽은 이 완료 검사에서 제외되지만,
+차체 경로와 겹치는 벽·물체는 계속 장애물로 판단한다.
 콘 구간은 기존대로 진입 시 켜고, 콘 단계 종료 시 끈다. 종료·고장 정지 때도 모터를 정지한다.
 모터 상태 전환 확인 중에는 차량이 정지한다. 켤 때는 새로운 스캔이 들어와야 회피를 시작한다.
 코어 종료 후 요구 heartbeat가 끊기면 모터를 정지한다.
@@ -66,7 +68,7 @@ LiDAR 모터·스캔·카메라·오도메트리·차체 제어권과 보정 확
 |1 방지턱 서행|mission_01_slow.py|mission_01_slow.yaml|class 5 확인 → 감속 → 지정 거리·최소 시간 경과 및 표지판 사라짐|
 |2 서행 유도선|mission_02_guide.py|mission_02_guide.yaml|앞 단계 완료 → 저속 차선 추종 → 지정 거리 통과|
 |3 보행자|mission_03_pedestrian.py|mission_03_pedestrian.yaml|class 4 → 정지선 또는 보정 거리에서 정지 → 실제 정지 확인 후 3초 대기 → 발진|
-|4 3차선 장애물|mission_04_obstacle.py|mission_04_obstacle.yaml|4번 활성화 즉시 회피 모드 요청(흰색 구분선 대기 없음) → LiDAR로 가능한 경로 선택 → 최소 거리 주행·중앙 8cm/헤딩 0.12rad 이내·방향 표지판·유효한 전방 비움 1초 확인|
+|4 3차선 장애물|mission_04_obstacle.py|mission_04_obstacle.yaml|4번 활성화 즉시 회피 모드 요청(흰색 구분선 대기 없음) → LiDAR로 가능한 경로 선택 → 최소 거리 주행·중앙 12cm/헤딩 0.26rad(약 15°) 이내·방향 표지판·유효한 전방 비움 1초 확인|
 |5 갈림길|mission_05_intersection.py|mission_05_intersection.yaml|class 2 좌/class 3 우 → 진입 거리·오도메트리 회전각 → 차선 재검출 및 출구 거리|
 |6 라바콘|mission_06_cone.py|mission_06_cone.yaml|class 7 → LiDAR 좌우 사이 통로 추종 → 최소 거리·표지판 및 근거리 통로 장애물 사라짐·차선 재검출 지속|
 |7 횡단보도/신호등|mission_07_traffic.py|mission_07_traffic.yaml|횡단보도 또는 신호등 감지 → class 0 면적 2900px² 이상 즉시 정지 → class 1 면적 2700px² 이상 차선 복귀. 동시 검출은 빨강 우선|
@@ -97,6 +99,9 @@ LiDAR 모터·스캔·카메라·오도메트리·차체 제어권과 보정 확
 배포 환경에서는 설치된 `share/core/config/`를 사용한다. `CORE_CONFIG_DIR`로 바꿀 수 있다.
 YAML만 수정하면 관련 터미널을 재실행한다. 소스가 있는 이 환경에서는 YAML 재빌드가 필요 없다.
 CLI의 `--ros-args -p 이름:=값` 또는 마지막 `--params-file`은 기본 설정 뒤에 적용된다.
+
+4번 완료 정렬 허용치는 `config/mission_04_obstacle.yaml`의
+`obstacle_exit_center_tolerance`(m), `obstacle_exit_heading_tolerance`(rad)로 설정한다.
 
 ## v3 보정값 입력
 

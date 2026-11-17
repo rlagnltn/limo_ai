@@ -23,10 +23,15 @@ class ObstacleExitTests(unittest.TestCase):
     def core(self, signs=(2,)):
         h,_,_=core_tests.CoreLidarGateTests().harness('intersection',True)
         h.lidar_latched=True
+        h.controller.lidar_enabled=True
         h.estop=False;h.last_estop=time.monotonic()
         h.controller.fresh=lambda *args: True
-        h.controller.obstacles=dict(valid=True,points=[])
-        h.controller.curve_clear=lambda *args: True
+        h.controller.cfg.update(robot_width=.22,safety_margin=0.,robot_front=.18,
+                                robot_rear=.18,rear_axle_offset=.1)
+        h.controller.obstacles=dict(valid=True,points=[],coverage=[1.]*36,
+                                    range_limit=3.,sensor_origin=[0.,0.])
+        h.controller.footprint_clear=lambda *args,**kw: LimoControl.footprint_clear(h.controller,*args,**kw)
+        h.controller.curve_clear=lambda *args,**kw: LimoControl.curve_clear(h.controller,*args,**kw)
         h.tracker.signs=lambda now: frozenset(signs)
         return h
 
@@ -73,13 +78,44 @@ class ObstacleExitTests(unittest.TestCase):
                 sample['lane'].update(ground_heading=.119,ground_centers=[[.8,-.075]],
                                       ground_lines=[[math.tan(.119),.655/math.cos(.119)],
                                                     [math.tan(.119),-.995/math.cos(.119)]])
-            if problem=='heading':sample['lane']['ground_heading']=.2
+            if problem=='heading':sample['lane']['ground_heading']=.35
             if problem=='no_metric':sample['lane']['metric_valid']=False
-            if problem=='blocked':sample['points']=((.5,0.),)
+            if problem=='blocked':sample.update(points=((.5,0.),),lidar_clear=False)
             if problem=='unknown_scan':sample['lidar_clear']=False
             mission.update(Observation(10.,1.2,**sample))
             result=mission.update(Observation(11.1,1.2,**sample))
             self.assertEqual(result.done,problem=='none',problem)
+
+    def test_parallel_side_wall_outside_body_does_not_block_release_or_exit(self):
+        h=self.core()
+        h.controller.obstacles['points']=[[x,.25] for x in (.2,.4,.6,.8,1.)]
+        self.assertTrue(Core.lidar_front_clear(h,time.monotonic()))
+        mission=ObstacleMission(DEFAULTS)
+        mission.phase='avoiding'
+        lane=dict(valid=True,metric_valid=True,ground_heading=0.,ground_lines=[[0.,.825],[0.,-.825]])
+        for now in (10.,11.1):
+            result=mission.update(Observation(now,1.2,signs=frozenset({2}),lane=lane,
+                                             points=tuple(h.controller.obstacles['points']),lidar_clear=True))
+        self.assertTrue(result.done)
+        self.assertFalse(Core.update_lidar_request(h))
+
+    def test_wall_intersecting_the_body_path_still_blocks_release(self):
+        h=self.core()
+        h.controller.obstacles['points']=[[x,.08] for x in (.2,.4,.6,.8)]
+        self.assertFalse(Core.lidar_front_clear(h,time.monotonic()))
+        self.assertTrue(Core.update_lidar_request(h))
+
+    def test_relaxed_alignment_accepts_11cm_and_14degrees(self):
+        mission=ObstacleMission(DEFAULTS)
+        mission.phase='avoiding'
+        heading=.24
+        center=.11/math.cos(heading)
+        lane=dict(valid=True,metric_valid=True,ground_heading=heading,
+                  ground_lines=[[math.tan(heading),.825+center],
+                                [math.tan(heading),-.825+center]])
+        for now in (10.,11.1):
+            result=mission.update(Observation(now,1.2,signs=frozenset({2}),lane=lane,lidar_clear=True))
+        self.assertTrue(result.done)
 
     def test_rotated_road_does_not_use_a_single_cross_section_as_a_wall(self):
         cfg=dict(robot_width=.22,safety_margin=.04,robot_front=.18,robot_rear=.18)

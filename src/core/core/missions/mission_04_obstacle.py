@@ -3,7 +3,8 @@ import math
 
 
 DEFAULTS = dict(obstacle_min_distance=1.0,
-                obstacle_max_distance=8.0, obstacle_exit_confirm=1.0)
+                obstacle_max_distance=8.0, obstacle_exit_confirm=1.0,
+                obstacle_exit_center_tolerance=0.12, obstacle_exit_heading_tolerance=0.26)
 
 
 class ObstacleMission(Mission):
@@ -22,10 +23,10 @@ class ObstacleMission(Mission):
             offset = ((lines[0][1]+lines[1][1])/2*math.cos(heading)
                       if len(lines) == 2 else math.inf)
             clear = (obs.lane.get('valid') is True and obs.lane.get('metric_valid') is True
-                     and abs(offset) <= 0.08 and abs(heading) <= 0.12
+                     and abs(offset) <= self.cfg['obstacle_exit_center_tolerance']
+                     and abs(heading) <= self.cfg['obstacle_exit_heading_tolerance']
                      and (2 in obs.signs) != (3 in obs.signs) and obs.lidar_clear
-                     and self.distance(obs) >= self.cfg['obstacle_min_distance']
-                     and self.front_clear(obs, 0.8))
+                     and self.distance(obs) >= self.cfg['obstacle_min_distance'])
             if self.stable_clear(clear, obs.now, self.cfg['obstacle_exit_confirm']):
                 return Result({'mode': 'follow'}, done=True, reason='direction_sign_and_clear_center_exit')
         return Result(reason=self.phase)

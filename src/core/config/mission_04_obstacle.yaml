@@ -3,6 +3,8 @@ core:
     obstacle_min_distance: 1.0
     obstacle_max_distance: 8.0
     obstacle_exit_confirm: 1.0
+    obstacle_exit_center_tolerance: 0.12  # metres at the vehicle position
+    obstacle_exit_heading_tolerance: 0.26  # radians, approximately 15 degrees
 limo_control:
   ros__parameters:
     lane_change_distance: 1.2

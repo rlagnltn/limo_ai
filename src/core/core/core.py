@@ -125,13 +125,11 @@ class Core(Node):
 
     def lidar_front_clear(self, now):
         control = self.controller
-        return (self.lidar_actual is True and not self.lidar_pending
+        return (control.lidar_enabled and self.lidar_actual is True and not self.lidar_pending
                 and now-self.lidar_state_received <= self.cfg['input_timeout']
                 and not self.estop and now-self.last_estop <= self.cfg['input_timeout']
                 and control.fresh('obstacles', now) and control.fresh('e_stop', now)
                 and control.obstacles.get('valid') is True
-                and not any(0 < x < 0.8 and abs(y) < 0.3
-                            for x, y in control.obstacles.get('points', []))
                 and control.curve_clear(0.0, 0.8))
 
     def dispatch(self, command):
