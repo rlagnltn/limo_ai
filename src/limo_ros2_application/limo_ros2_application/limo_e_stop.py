@@ -1,7 +1,5 @@
 import rclpy
-import signal
 from rclpy.node import Node
-from rclpy.signals import SignalHandlerOptions
 
 from std_msgs.msg import Bool 
 from sensor_msgs.msg import LaserScan
@@ -34,26 +32,13 @@ class LimoEStop(Node):
         self.publisher_.publish(estop)
 
 def main(args=None):
-    rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
-    stop_requested = False
-
-    def request_stop(_signum, _frame):
-        nonlocal stop_requested
-        stop_requested = True
-
-    signal.signal(signal.SIGINT, request_stop)
+    rclpy.init(args=args)
 
     limo_e_stop = LimoEStop()
-    try:
-        while rclpy.ok() and not stop_requested:
-            rclpy.spin_once(limo_e_stop, timeout_sec=0.1)
-    except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):
-        pass
-    finally:
-        signal.signal(signal.SIGINT, signal.SIG_IGN)
-        limo_e_stop.destroy_node()
-        if rclpy.ok():
-            rclpy.shutdown()
+    rclpy.spin(limo_e_stop)
+
+    limo_e_stop.destroy_node()
+    rclpy.shutdown()
 
 if __name__ == '__main__':
     main()

@@ -1,8 +1,0 @@
-speed_up
-slow_down
-turn_right
-red_light
-yellow_light
-green_light
-pedestrian
-traffic_cone

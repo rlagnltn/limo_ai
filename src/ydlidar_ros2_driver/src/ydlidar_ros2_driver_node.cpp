@@ -24,6 +24,7 @@
 #include "rclcpp/time_source.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
 #include "std_srvs/srv/empty.hpp"
+#include "std_srvs/srv/set_bool.hpp"
 #include <vector>
 #include <iostream>
 #include <string>
@@ -150,9 +151,16 @@ int main(int argc, char *argv[]) {
   node->get_parameter("invalid_range_is_inf", invalid_range_is_inf);
 
 
+  const bool auto_start = node->declare_parameter<bool>("auto_start", true);
+  bool scanning = false;
   bool ret = laser.initialize();
   if (ret) {
-    ret = laser.turnOn();
+    if (auto_start) {
+      scanning = laser.turnOn();
+    } else {
+      laser.turnOff();
+      RCLCPP_INFO(node->get_logger(), "LiDAR motor stopped; waiting for mission start");
+    }
   } else {
     RCLCPP_ERROR(node->get_logger(), "%s\n", laser.DescribeError());
   }
@@ -160,28 +168,48 @@ int main(int argc, char *argv[]) {
   auto laser_pub = node->create_publisher<sensor_msgs::msg::LaserScan>("scan", rclcpp::QoS(rclcpp::SensorDataQoS()));
 
   auto stop_scan_service =
-    [&laser](const std::shared_ptr<rmw_request_id_t> request_header,
+    [&laser, &scanning](const std::shared_ptr<rmw_request_id_t> request_header,
   const std::shared_ptr<std_srvs::srv::Empty::Request> req,
   std::shared_ptr<std_srvs::srv::Empty::Response> response) -> bool
   {
-    return laser.turnOff();
+    const bool success = laser.turnOff();
+    if (success) scanning = false;
+    return success;
   };
 
   auto stop_service = node->create_service<std_srvs::srv::Empty>("stop_scan",stop_scan_service);
 
   auto start_scan_service =
-    [&laser](const std::shared_ptr<rmw_request_id_t> request_header,
+    [&laser, &scanning](const std::shared_ptr<rmw_request_id_t> request_header,
   const std::shared_ptr<std_srvs::srv::Empty::Request> req,
   std::shared_ptr<std_srvs::srv::Empty::Response> response) -> bool
   {
-    return laser.turnOn();
+    const bool success = scanning || laser.turnOn();
+    if (success) scanning = true;
+    return success;
   };
 
   auto start_service = node->create_service<std_srvs::srv::Empty>("start_scan",start_scan_service);
 
+  auto set_scan_service = node->create_service<std_srvs::srv::SetBool>(
+    "set_scan_enabled",
+    [&laser, &scanning](const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
+                        std::shared_ptr<std_srvs::srv::SetBool::Response> response) {
+      response->success = request->data ? (scanning || laser.turnOn()) : laser.turnOff();
+      if (response->success) scanning = request->data;
+      response->message = response->success ? (scanning ? "scanning" : "motor_stopped")
+                                            : "LiDAR motor command failed";
+    });
+
   rclcpp::WallRate loop_rate(20);
 
   while (ret && rclcpp::ok()) {
+
+    rclcpp::spin_some(node);
+    if (!scanning) {
+      loop_rate.sleep();
+      continue;
+    }
 
     LaserScan scan;//
 

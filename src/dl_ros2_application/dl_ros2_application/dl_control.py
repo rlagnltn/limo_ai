@@ -2,14 +2,11 @@ import rclpy
 from rclpy.node import Node
 from dl_ros2_msgs.msg import Control, BoundingBoxes
 from geometry_msgs.msg import Twist
-from std_msgs.msg import Bool, String
+from std_msgs.msg import Bool
 from cv_bridge import CvBridge
 from sensor_msgs.msg import CompressedImage, Image
 import cv2
 import time
-import signal
-import json
-from rclpy.signals import SignalHandlerOptions
 import numpy as np
 
 def sigmoid(x, gain):
@@ -22,11 +19,6 @@ class DlControlNode(Node):
         
         self.stop_flag = False
         self.start_flag = False
-        self.require_lane_valid = self.declare_parameter('require_lane_valid', False).value
-        self.lane_valid = False
-        self.lane_valid_time = float('-inf')
-        self.last_control_time = float('-inf')
-        self.last_command = Twist()
 
         self.control_1 = 0.0
         self.control_2 = 0.0
@@ -35,13 +27,13 @@ class DlControlNode(Node):
         self.prev_control_2 = 0.0
 
         self.flags = {
-            'slow_down': {'active': False, 'past_time': 0.0, 'duration_sec': 0.0, 'size_threshold': 0.0},
-            'speed_up': {'active': False, 'past_time': 0.0, 'duration_sec': 0.0, 'size_threshold': 0.0},
-            'turn_right': {'active': False, 'past_time': 0.0, 'duration_sec': 0.0, 'size_threshold': 0.0},
-            'red_light': {'active': False, 'past_time': 0.0, 'duration_sec': 0.0, 'size_threshold': 0.0},
-            'yellow_light': {'active': False, 'past_time': 0.0, 'duration_sec': 0.0, 'size_threshold': 0.0},
-            'green_light': {'active': False, 'past_time': 0.0, 'duration_sec': 0.0, 'size_threshold': 0.0},
-            'pedestrian': {'active': False, 'past_time': 0.0, 'duration_sec': 0.0, 'pass_by_duration_sec': 0.0, 'size_threshold': 0.0}
+            'slow_down': {'active': False, 'past_time': time.time(), 'duration_sec': 0.0, 'size_threshold': 0.0},
+            'speed_up': {'active': False, 'past_time': time.time(), 'duration_sec': 0.0, 'size_threshold': 0.0},
+            'turn_right': {'active': False, 'past_time': time.time(), 'duration_sec': 0.0, 'size_threshold': 0.0},
+            'red_light': {'active': False, 'past_time': time.time(), 'duration_sec': 0.0, 'size_threshold': 0.0},
+            'yellow_light': {'active': False, 'past_time': time.time(), 'duration_sec': 0.0, 'size_threshold': 0.0},
+            'green_light': {'active': False, 'past_time': time.time(), 'duration_sec': 0.0, 'size_threshold': 0.0},
+            'pedestrian': {'active': False, 'past_time': time.time(), 'duration_sec': 0.0, 'pass_by_duration_sec': 0.0, 'size_threshold': 0.0}
         }
         
         self.current_image = None
@@ -50,14 +42,12 @@ class DlControlNode(Node):
         self._declare_parameters()
         self._get_parameters()
         
-        self.lane_sub_ = self.create_subscription(Bool, '/lane_tracking_valid', self.lane_callback, 10)
         self.stop_sub_ = self.create_subscription(Bool, '/emergency_stop', self.stop_callback, 10)
         self.control_sub_ = self.create_subscription(Control, '/control', self.control_callback, 10)
         self.box_sub_ = self.create_subscription(BoundingBoxes, '/yolo_bounding_boxes', self.yolo_callback, 10)
         self.image_sub_ = self.create_subscription(CompressedImage, '/camera/color/image_raw/compressed', self.image_callback, 10)
         
         self.cmd_pub_ = self.create_publisher(Twist, '/cmd_vel', 10)
-        self.status_pub_ = self.create_publisher(String, '/dl_control/status', 10)
         self.dl_image_pub = self.create_publisher(Image, '/dl_image', 10)
         self.dl_image_compressed_pub = self.create_publisher(CompressedImage, '/dl_image/compressed', 10)
 
@@ -122,14 +112,6 @@ class DlControlNode(Node):
                 self.flags[flag_key]['pass_by_duration_sec'] = self.get_parameter('pedestrian_pass_by_duration_sec').value
             self.flags[flag_key]['size_threshold'] = self.get_parameter(f'{flag_key}_size_threshold').value
 
-    def lane_callback(self, msg: Bool):
-        self.lane_valid = msg.data
-        self.lane_valid_time = time.monotonic()
-
-    def lane_ready(self):
-        return (self.lane_valid and time.monotonic() - self.lane_valid_time < .8
-                and time.monotonic() - self.last_control_time < .8)
-
     def stop_callback(self, msg: Bool):
         self.stop_flag = msg.data
 
@@ -161,7 +143,6 @@ class DlControlNode(Node):
         self.control_2 = self.apply_derivative_control(raw_control_2, self.prev_control_2)
 
         self.start_flag = True
-        self.last_control_time = time.monotonic()
 
     def yolo_callback(self, msg: BoundingBoxes):
         self.current_boxes = msg.bounding_boxes
@@ -197,15 +178,12 @@ class DlControlNode(Node):
 
     def timer_callback(self):
         self.publish_cmd_vel()
-        self.publish_status()
         self.publish_debug_image()
 
     def publish_cmd_vel(self):
         cmd = Twist()
         
-        if (self.stop_flag or not self.start_flag
-                or (self.require_lane_valid and not self.lane_ready())):
-            self.last_command = cmd
+        if self.stop_flag or not self.start_flag:
             self.cmd_pub_.publish(cmd)
             return
 
@@ -240,41 +218,7 @@ class DlControlNode(Node):
             cmd.linear.x = np.clip(cmd.linear.x, self.min_speed, self.max_speed)
             cmd.angular.z = np.clip(cmd.angular.z, -self.max_steering, self.max_steering)
 
-        self.last_command = cmd
         self.cmd_pub_.publish(cmd)
-
-    def status_payload(self):
-        if self.stop_flag:
-            state = 'emergency_stop'
-        elif self.require_lane_valid and not self.lane_ready():
-            state = 'lane_lost'
-        elif not self.start_flag:
-            state = 'waiting'
-        elif self.flags['red_light']['active']:
-            state = 'red_light_stop'
-        elif self.flags['pedestrian']['active']:
-            state = 'pedestrian_stop'
-        elif self.flags['turn_right']['active']:
-            state = 'turning_right'
-        elif self.flags['slow_down']['active'] or self.flags['yellow_light']['active']:
-            state = 'slowing_down'
-        elif self.flags['speed_up']['active']:
-            state = 'speeding_up'
-        elif abs(self.last_command.linear.x) + abs(self.last_command.angular.z) < 1e-6:
-            state = 'stopped'
-        else:
-            state = 'driving'
-        return {
-            'state': state,
-            'emergency_stop': bool(self.stop_flag),
-            'inference_ready': bool(self.start_flag),
-            'active_flags': [key for key, value in self.flags.items() if value['active']],
-            'command': {'linear_x': float(self.last_command.linear.x),
-                        'angular_z': float(self.last_command.angular.z)},
-        }
-
-    def publish_status(self):
-        self.status_pub_.publish(String(data=json.dumps(self.status_payload())))
 
     def publish_debug_image(self):
         if self.current_image is None:
@@ -328,24 +272,17 @@ class DlControlNode(Node):
         self.dl_image_compressed_pub.publish(debug_compressed_msg)
 
 def main(args=None):
-    rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
+    rclpy.init(args=args)
     dl_control_node = None
     try:
         dl_control_node = DlControlNode()
         rclpy.spin(dl_control_node)
-    except KeyboardInterrupt:
-        pass
     except Exception as e:
         print(f"Error running node: {e}")
     finally:
-        signal.signal(signal.SIGINT, signal.SIG_IGN)
         if dl_control_node is not None:
-            if rclpy.ok():
-                dl_control_node.cmd_pub_.publish(Twist())
-                time.sleep(0.05)
             dl_control_node.destroy_node()
-        if rclpy.ok():
-            rclpy.shutdown()
+        rclpy.shutdown()
 
 if __name__ == '__main__':
     main()

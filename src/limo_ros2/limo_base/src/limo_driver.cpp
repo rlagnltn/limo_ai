@@ -29,7 +29,6 @@
  */
 
 #include "limo_base/limo_driver.h"
-#include <poll.h>
 int flag=0; 
 
 namespace AgileX {
@@ -89,10 +88,7 @@ LimoDriver::LimoDriver(std::string node_name):rclcpp::Node(node_name),keep_runni
 }
 
 LimoDriver::~LimoDriver() {
-    keep_running_ = false;
-    if (read_data_thread_ && read_data_thread_->joinable()) {
-        read_data_thread_->join();
-    }
+
 }
 
 void LimoDriver::run(){
@@ -144,14 +140,7 @@ void LimoDriver::connect(std::string dev_name, uint32_t bouadrate) {
 void LimoDriver::readData() {
     uint8_t rx_data = 0;
     // RCLCPP_INFO(this->get_logger(),"connet the serial port:2");
-    while (keep_running_ && rclcpp::ok()) {
-        struct pollfd descriptor;
-        descriptor.fd = port_->nativeHandle();
-        descriptor.events = POLLIN;
-        descriptor.revents = 0;
-        if (poll(&descriptor, 1, 100) <= 0 || !(descriptor.revents & POLLIN)) {
-            continue;
-        }
+    while (rclcpp::ok()) {
         // RCLCPP_INFO(this->get_logger(),"connet the serial port:3");
         auto len = port_->readByte(&rx_data);
         if (len < 1)
@@ -437,14 +426,6 @@ void LimoDriver::twistCmdCallback(const geometry_msgs::msg::Twist::SharedPtr msg
             break;
         }
         case MODE_ACKERMANN: {
-            if (!std::isfinite(msg->linear.x) || !std::isfinite(msg->angular.z)) {
-                setMotionCommand(0, 0, 0, 0);
-                return;
-            }
-            if (std::fabs(msg->linear.x) < 1e-6 || std::fabs(msg->angular.z) < 1e-6) {
-                setMotionCommand(msg->linear.x, 0, 0, 0);
-                return;
-            }
             double r = msg->linear.x / msg->angular.z;
             if(fabs(r) < track_/2.0)
             {
@@ -548,9 +529,9 @@ void LimoDriver::publishOdometry(double stamp, double linear_velocity,
     
     switch (motion_mode_) {
         case MODE_ACKERMANN: {
+            const double central_angle = convertInnerAngleToCentral(steering_angle);
             vx = linear_velocity;
             vy = 0.0;
-            const double central_angle = convertInnerAngleToCentral(steering_angle);
             wz = vx * std::tan(central_angle) / wheelbase_;
             encoder_present_theta_ = normalizeAngle(encoder_last_theta_ + wz * dt);
             encoder_last_theta_ = encoder_present_theta_;
@@ -590,7 +571,7 @@ void LimoDriver::publishOdometry(double stamp, double linear_velocity,
         }
         default:{
             RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
-                                 "Waiting for a supported motion mode (received: %u)", motion_mode_);
+                                 "Unknown motion mode: %u; odometry unavailable", motion_mode_);
             return;
             break;
         }

@@ -76,9 +76,7 @@ int SerialPort::openPort() {
 }
 
 int SerialPort::closePort() {
-    const int descriptor = fd_;
-    fd_ = -1;
-    if (descriptor < 0 || close(descriptor) < 0) {
+    if (close(fd_) < 0) {
         return -1;
     }
     else {

@@ -48,8 +48,6 @@ public:
         }
     }
 
-    int nativeHandle() const { return fd_; }
-
     int openPort();
     int closePort();
 
@@ -62,7 +60,7 @@ public:
 private:
     std::string path_;
     uint32_t baudrate_;
-    int fd_ = -1;
+    int fd_;
 };
 
 }

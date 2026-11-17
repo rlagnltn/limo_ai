@@ -1,5 +1,6 @@
 ydlidar_ros2_driver_node:
   ros__parameters:
+    auto_start: false
     port: /dev/ydlidar
     frame_id: laser_link
     ignore_array: ""

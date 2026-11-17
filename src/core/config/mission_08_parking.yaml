@@ -1,0 +1,13 @@
+core:
+  ros__parameters:
+    # Coordinates relative to the vehicle when class 6 is confirmed, metres/radians.
+    parking_side: right
+    parking_approach: 0.6
+    parking_radius: 0.6
+    parking_reverse: 0.3
+    parking_sample: 0.08
+    parking_box: [-0.35, 0.25, -1.35, -0.45]
+limo_control:
+  ros__parameters:
+    parking_speed: 0.05
+    parking_lookahead: 0.2

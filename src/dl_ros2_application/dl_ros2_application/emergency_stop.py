@@ -3,8 +3,6 @@ from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Bool
 import math
-import signal
-from rclpy.signals import SignalHandlerOptions
 
 class EmergencyStop(Node):
     def __init__(self):
@@ -32,17 +30,11 @@ class EmergencyStop(Node):
         self.pub_.publish(emergency_stop_flag)
 
 def main(args=None):
-    rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
+    rclpy.init(args=args)
     node = EmergencyStop()
-    try:
-        rclpy.spin(node)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        signal.signal(signal.SIGINT, signal.SIG_IGN)
-        node.destroy_node()
-        if rclpy.ok():
-            rclpy.shutdown()
+    rclpy.spin(node)
+    node.destroy_node()
+    rclpy.shutdown()
 
 if __name__ == '__main__':
     main()

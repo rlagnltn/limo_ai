@@ -1,0 +1,24 @@
+detect_line:
+  ros__parameters:
+    # v1 outer-boundary tracking applies only after jihyuk's odometry turn.
+    merge_reference_distance: 50.0
+    merge_confirm_sec: 0.5
+    merge_width_tolerance_px: 20.0
+    merge_boundary_margin_px: 60
+    show_visualization: true
+    roi_x_l: 0
+    roi_x_h: 0
+    roi_y_l: 280
+    roi_y_h: 480
+    lane_h_l: 0
+    lane_l_l: 90
+    lane_s_l: 100
+    lane_h_h: 60
+    lane_l_h: 220
+    lane_s_h: 255
+    reference_distance: 0
+    ground_calibrated: false
+    # Maps FULL IMAGE pixel coordinates to base_link ground [forward,left] metres.
+    ground_homography: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    calibration_width: 640
+    calibration_height: 480

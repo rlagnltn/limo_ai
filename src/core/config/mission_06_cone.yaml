@@ -1,0 +1,8 @@
+core:
+  ros__parameters:
+    cone_min_distance: 1.2
+    cone_max_distance: 8.0
+    cone_exit_confirm: 1.0
+limo_control:
+  ros__parameters:
+    avoidance_horizon: 1.2
