@@ -55,6 +55,10 @@ LiDAR가 켜져 있는 동안에는 스캔과 정지 heartbeat를 계속 요구�
 실제 제어는 `/set_scan_enabled` std_srvs/SetBool 서비스가 수행한다.
 수정 적용 시 1번 브링업·3번 미션 런치·4번 코어를 재실행한다.
 
+4번은 활성화와 동시에 회피 모드를 요청한다. 흰색 구분선 또는 `lane_count=3`은 시작 조건이 아니다.
+LiDAR 모터·스캔·카메라·오도메트리·차체 제어권과 보정 확인이 준비돼야 실제 주행한다.
+공통 영상 처리의 정지선/횡단보도 검출은 다른 미션용으로 유지한다.
+
 ## 미션 파일과 보정 파일
 
 |단계|Python (`core/missions/`)|YAML (`config/`)|시작과 완료|
@@ -62,7 +66,7 @@ LiDAR가 켜져 있는 동안에는 스캔과 정지 heartbeat를 계속 요구�
 |1 방지턱 서행|mission_01_slow.py|mission_01_slow.yaml|class 5 확인 → 감속 → 지정 거리·최소 시간 경과 및 표지판 사라짐|
 |2 서행 유도선|mission_02_guide.py|mission_02_guide.yaml|앞 단계 완료 → 저속 차선 추종 → 지정 거리 통과|
 |3 보행자|mission_03_pedestrian.py|mission_03_pedestrian.yaml|class 4 → 정지선 또는 보정 거리에서 정지 → 실제 정지 확인 후 3초 대기 → 발진|
-|4 3차선 장애물|mission_04_obstacle.py|mission_04_obstacle.yaml|3차선 지속 검출 → LiDAR로 가능한 차선 선택 → 최소 거리 주행·중앙 8cm/헤딩 0.12rad 이내·방향 표지판·유효한 전방 비움 1초 확인|
+|4 3차선 장애물|mission_04_obstacle.py|mission_04_obstacle.yaml|4번 활성화 즉시 회피 모드 요청(흰색 구분선 대기 없음) → LiDAR로 가능한 경로 선택 → 최소 거리 주행·중앙 8cm/헤딩 0.12rad 이내·방향 표지판·유효한 전방 비움 1초 확인|
 |5 갈림길|mission_05_intersection.py|mission_05_intersection.yaml|class 2 좌/class 3 우 → 진입 거리·오도메트리 회전각 → 차선 재검출 및 출구 거리|
 |6 라바콘|mission_06_cone.py|mission_06_cone.yaml|class 7 → LiDAR 좌우 사이 통로 추종 → 최소 거리·표지판 및 근거리 통로 장애물 사라짐·차선 재검출 지속|
 |7 횡단보도/신호등|mission_07_traffic.py|mission_07_traffic.yaml|횡단보도 또는 신호등 감지 → class 0 면적 2900px² 이상 즉시 정지 → class 1 면적 2700px² 이상 차선 복귀. 동시 검출은 빨강 우선|

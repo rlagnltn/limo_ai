@@ -2,20 +2,19 @@ from .base import Mission, Result
 import math
 
 
-DEFAULTS = dict(obstacle_entry_confirm=0.4, obstacle_min_distance=1.0,
+DEFAULTS = dict(obstacle_min_distance=1.0,
                 obstacle_max_distance=8.0, obstacle_exit_confirm=1.0)
 
 
 class ObstacleMission(Mission):
     name = 'obstacle'
+    def enter(self, obs):
+        super().enter(obs)
+        self.phase = 'avoiding'
+        return Result({'mode': 'obstacles'}, reason='obstacle_stage_activated')
+
     def update(self, obs):
-        if self.phase == 'waiting':
-            if self.stable_clear(obs.lane.get('lane_count') == 3, obs.now,
-                                 self.cfg['obstacle_entry_confirm']):
-                self.phase, self.origin = 'avoiding', obs.travel
-                self.clear_since = None
-                return Result({'mode': 'obstacles'}, reason='three_lanes_confirmed')
-        elif self.phase == 'avoiding':
+        if self.phase == 'avoiding':
             if self.distance(obs) > self.cfg['obstacle_max_distance']:
                 return Result(fault='obstacle_exit_not_found')
             lines = obs.lane.get('ground_lines', [])

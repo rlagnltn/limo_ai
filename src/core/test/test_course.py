@@ -47,9 +47,7 @@ class CourseTests(unittest.TestCase):
         self.assertEqual(tick(7, 1.6, signs=[4]).command['mode'], 'pedestrian')
         tick(8, 2, mode='pedestrian', phase='waiting')
         self.assertTrue(tick(11, 2).done)
-        tick(12, 2)
-        tick(13, 2, lane=dict(valid=True, lane_count=3))
-        self.assertEqual(tick(13.5, 2, lane=dict(valid=True, lane_count=3)).command['mode'], 'obstacles')
+        self.assertEqual(tick(12, 2).command['mode'], 'obstacles')
         tick(15, 3.1, signs=[2], mode='obstacles')
         self.assertTrue(tick(16.1, 3.1, signs=[2], mode='obstacles').done)
         tick(17, 3.1)
@@ -104,13 +102,22 @@ class CourseTests(unittest.TestCase):
     def test_exit_timeout_latches_hold(self):
         c = Course(config(obstacle_max_distance=2.0))
         c.index = 3
-        c.tick(Observation(0))
-        c.tick(Observation(1, lane={'lane_count': 3}))
-        c.tick(Observation(2, lane={'lane_count': 3}))
+        self.assertEqual(c.tick(Observation(0)).command['mode'], 'obstacles')
         self.assertTrue(c.tick(Observation(3, travel=3)).fault)
         self.assertEqual(c.tick(Observation(4)).command['mode'], 'hold')
         self.assertEqual(c.results[3]['state'], 'failed')
         self.assertEqual(len([e for e in c.events if e['state']=='failed']), 1)
+
+    def test_obstacle_activation_does_not_wait_for_dividers(self):
+        for lane in ({}, {'lane_count': 0}, {'lane_count': 1}, {'lane_count': 3}):
+            c = Course(config())
+            c.index = 3
+            result = c.tick(Observation(10., travel=2., lane=lane))
+            self.assertEqual(result.command, {'mode': 'obstacles'})
+            self.assertEqual(c.active.phase, 'avoiding')
+            self.assertEqual(c.active.origin, 2.)
+            self.assertEqual(c.active.started, 10.)
+            self.assertEqual(c.results[3]['state'], 'active')
 
     def test_pending_missions_are_not_reported_as_successful(self):
         c = Course(config())

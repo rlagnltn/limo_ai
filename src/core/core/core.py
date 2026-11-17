@@ -140,9 +140,8 @@ class Core(Node):
         try:
             mode = command.get('mode')
             if mode:
-                self.controller.cfg['auto_obstacle_mode'] = (
-                    self.course.active.name == 'obstacle' and mode != 'hold'
-                    and self.course.active.phase == 'avoiding')
+                # Course activation owns the mode; divider detection never arms it.
+                self.controller.cfg['auto_obstacle_mode'] = False
                 if mode == self.controller.mode:
                     return
             self.controller.command_callback(String(data=json.dumps(command)))
@@ -167,6 +166,7 @@ class Core(Node):
     def report_mission_events(self):
         labels = {'waiting': '대기', 'active': '진행', 'completed': '완료 판정', 'failed': '실패/정지'}
         reasons = {
+            'obstacle_stage_activated': '4번 활성화 / 장애물 회피 시작',
             'bump_passed_by_odometry': '서행 표지판 사라짐 + 설정 거리/시간 충족',
             'guide_distance_completed': '서행 유도선 설정 거리 통과',
             'pedestrian_stop_and_wait_completed': '보행자 정지 후 대기 완료/발진',

@@ -1,6 +1,5 @@
 core:
   ros__parameters:
-    obstacle_entry_confirm: 0.4
     obstacle_min_distance: 1.0
     obstacle_max_distance: 8.0
     obstacle_exit_confirm: 1.0
