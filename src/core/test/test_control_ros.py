@@ -74,6 +74,11 @@ class ControllerTests(unittest.TestCase):
                                             ('follow',.7,.12), ('slow',.7,.12)):
             h.mode, h.lane['confidence'] = mode, confidence
             self.assertAlmostEqual(LimoControl.compute_control(h, 10., .05)[0], expected)
+        h.mode, h.lane['confidence'] = 'obstacles', 1.
+        for reason, expected in (('cautious_open_direction', .05),
+                                 ('tracking_odometry_lane_path', .15)):
+            h.lane_change_curvature = lambda *args: (.5, reason)
+            self.assertAlmostEqual(LimoControl.compute_control(h, 10., .05)[0], expected)
 
     def test_lidar_disabled_does_not_require_scan_or_lidar_stop_heartbeat(self):
         cfg = dict(command_control_mode=1, command_mode_settle=.2, lap_timeout=600.,

@@ -504,10 +504,10 @@ class LimoControl(Node):
 
 
 
-    def lane_change_curvature(self, baseline):
+    def lane_change_curvature(self, baseline, dt=0.05):
         if not self.cfg['geometry_verified'] or self.lane.get('metric_valid') is not True:
             return None, 'lane_change_needs_calibration'
-        return self.lane_planner.command(self)
+        return self.lane_planner.command(self, dt)
 
 
     def cone_curvature(self):
@@ -724,11 +724,12 @@ class LimoControl(Node):
         if self.mode == 'follow' and self.cfg['auto_obstacle_mode'] and self.multi_frames >= 4:
             self._enter('obstacles', now)
         if self.mode == 'obstacles':
-            curvature, reason = self.lane_change_curvature(baseline)
+            curvature, reason = self.lane_change_curvature(baseline, dt)
             if curvature is None:
                 return 0.0, 0.0, reason
             else:
-                return min(speed, self.cfg['slow_speed'], 0.15), curvature, reason
+                limit = 0.05 if reason == 'cautious_open_direction' else 0.15
+                return min(speed, self.cfg['slow_speed'], limit), curvature, reason
         return speed, baseline, 'lane_follow'
 
     def publish_motion(self, speed, curvature):

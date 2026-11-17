@@ -86,7 +86,47 @@ class LaneChangePlanner:
                 return path
         return []
 
-    def command(self, control):
+    def open_direction(self, control, bounds, dt):
+        """Advance through a verified short opening when no full lane path fits."""
+        heading = math.atan((bounds[0][0]+bounds[1][0])/2)
+        candidates = [control.last_curvature, 0.]
+        candidates += [control.max_curvature*i/8 for i in range(-8, 9)]
+        best = None
+        rear = control.cfg['rear_axle_offset']
+        for curvature in candidates:
+            # The motor receives rate-limited steering, so check that first step too.
+            step = control.cfg['curvature_rate']*dt
+            applied = max(control.last_curvature-step,
+                          min(control.last_curvature+step, curvature))
+            if not control.curve_clear(applied, 0.24, road_bounds=bounds):
+                continue
+            distance = 0.
+            for i in range(31):
+                travel = i*0.04
+                angle = curvature*travel
+                if abs(angle) > math.pi/3:
+                    break
+                if abs(curvature) < 1e-6:
+                    x, y = travel, 0.
+                else:
+                    x = math.sin(angle)/curvature+rear*(math.cos(angle)-1)
+                    y = (1-math.cos(angle))/curvature+rear*math.sin(angle)
+                if not control.footprint_clear(x, y, angle, road_bounds=bounds,
+                                               check_coverage=True):
+                    break
+                distance = travel
+            if distance < 0.24:
+                continue
+            score = (distance-0.08*abs(curvature-control.last_curvature)
+                     -0.02*abs(curvature)-0.1*abs(curvature*distance-heading))
+            if best is None or score > best[0]:
+                best = score, curvature
+        if best is None:
+            return None, 'no_clear_short_forward_path'
+        control.target_lane = 0 if best[1] > 0.01 else 2 if best[1] < -0.01 else 1
+        return best[1], 'cautious_open_direction'
+
+    def command(self, control, dt=0.05):
         bounds = control.lane.get('ground_lines')
         if not bounds:
             self.reset()
@@ -103,7 +143,7 @@ class LaneChangePlanner:
                 self.path, self.index = path, 0
             elif distance < 0.35 or not self.clear(control, remaining, bounds):
                 self.reset()
-                return None, 'no_clear_lane_change_path'
+                return self.open_direction(control, bounds, dt)
         target = self.path[self.index]
         walked = 0.
         for a, b in zip(self.path[self.index:], self.path[self.index+1:]):
