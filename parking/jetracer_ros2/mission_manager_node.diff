@@ -1,0 +1,39 @@
+--- /home/wego/limo_backups/parking_forward_20261119_014752/mission_manager_node.py	2026-11-18 14:44:27.891436882 +0900
++++ /home/wego/wego_ws/src/jetracer_ros2/jetracer_ros2/mission_manager_node.py	2026-11-19 01:55:02.635953652 +0900
+@@ -123,6 +123,11 @@
+         self._odom_warned = False
+         self._last_out_speed = 0.0
+         self._last_pedestrian_s = None    # 보행자 표지판을 마지막으로 본 odom 위치 (미션 무관)
++        # 주차 표지판은 같은 직선 끝에 있어 M1(신호등) 중에 먼저 확정될 수 있다. YOLO 이벤트는
++        # 처음 확정될 때 한 번만 오므로 기억해 두고, M4 동안 시작 신호를 1초마다 다시 보낸다
++        # (방금 켜진 주차 노드가 첫 신호를 놓쳐도 시작되도록).
++        self._parking_sign_seen = False
++        self._parking_start_sent_ns = 0
+         def make_approach(offset_param):
+             offset = p(offset_param)
+             if offset < 0.0:
+@@ -218,8 +223,11 @@
+             self._last_pedestrian_s = self._odom.s
+         elif self._active == 'M2' and event in ('sign_a', 'sign_b'):
+             self.lane_mode_pub.publish(String(data='left' if event == 'sign_a' else 'right'))
+-        elif self._active == 'M4' and event == 'parking_sign':
+-            self.parking_start_pub.publish(Bool(data=True))
++        elif self._active in ('M1', 'M4') and event == 'parking_sign':
++            self._parking_sign_seen = True
++            if self._active == 'M4':
++                self.parking_start_pub.publish(Bool(data=True))
++                self._parking_start_sent_ns = self.get_clock().now().nanoseconds
+ 
+     def _odom_callback(self, msg):
+         pose = msg.pose.pose.position
+@@ -377,6 +385,10 @@
+             self.active_pub.publish(String(data=self._active))
+         if self._stopping:
+             self._reap_processes(now)
++        if (self._active == 'M4' and self._parking_sign_seen
++                and now - self._parking_start_sent_ns >= 1_000_000_000):
++            self._parking_start_sent_ns = now
++            self.parking_start_pub.publish(Bool(data=True))   # 주차 노드는 대기 중일 때만 반응
+         if self.m8.tick(now):
+             return
+         if self._active not in ('M1', 'M3'):   # M1·M3는 _report 에서 상태까지 같이 발행
