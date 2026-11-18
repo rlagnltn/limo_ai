@@ -16,7 +16,7 @@
 
 # 3번 터미널
 
-#ros2 launch core missions. launch.py
+#ros2 launch core missions.launch.py
 
 # 4번 터미널
 
