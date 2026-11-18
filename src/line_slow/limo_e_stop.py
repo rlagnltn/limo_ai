@@ -68,7 +68,7 @@ class LimoEStop(Node):
         super().__init__('limo_e_stop')
         defaults = dict(base_frame='base_link', scan_timeout=0.5,
                         sensor_max_age=0.5, controller_timeout=0.5, obstacle_range=3.0,
-                        robot_front=0.18, robot_rear=0.18, robot_width=0.22,
+                        robot_front=0.18, robot_rear=0.18, robot_width=0.20,
                         safety_margin=0.04, reaction_time=0.25,
                         braking_deceleration=0.4, max_speed=0.35,
                         clear_scans=3, inf_is_free=False,

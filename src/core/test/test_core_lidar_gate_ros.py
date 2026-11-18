@@ -56,7 +56,7 @@ class CoreLidarGateTests(unittest.TestCase):
         output, requests, status = [], [], []
         control = SimpleNamespace(
             cfg=dict(command_control_mode=1, require_ackermann=False),
-            lidar_enabled=mission == 'obstacle', received={},
+            lidar_enabled=mission in ('obstacle', 'cone'), received={},
             fresh=lambda key, now: key not in ('obstacles','e_stop'),
             vehicle_ok=True, odom_fault=False, vehicle_control_mode=1,
             mode='follow', phase='running', reason='lane_follow',
@@ -84,14 +84,14 @@ class CoreLidarGateTests(unittest.TestCase):
         return h, output, requests
 
     def test_non_lidar_missions_drive_without_scan_or_estop_heartbeat(self):
-        for mission in ('slow','guide','pedestrian','intersection','cone','traffic','parking'):
+        for mission in ('slow','guide','pedestrian','intersection','traffic','parking'):
             h, output, requests = self.harness(mission, False)
             Core.tick(h)
             self.assertGreater(output[-1].linear.x, 0, mission)
             self.assertFalse(requests[-1].data, mission)
 
     def test_lidar_missions_wait_for_motor_and_new_scan(self):
-        for mission in ('obstacle',):
+        for mission in ('obstacle', 'cone'):
             h, output, requests = self.harness(mission, False)
             Core.tick(h)
             self.assertEqual(output[-1].linear.x, 0)
@@ -114,16 +114,23 @@ class CoreLidarGateTests(unittest.TestCase):
         Core.tick(h)
         self.assertGreater(output[-1].linear.x, 0)
 
-    def test_cone_clock_receives_final_core_output_including_blocked_stop(self):
-        h, output, _ = self.harness('cone', False)
-        recorded = []
-        h.controller.record_cone_output = lambda now, command: recorded.append(command.linear.x)
+    def test_cone_does_not_publish_previous_command_at_exit_or_after_scan_loss(self):
+        h, output, _ = self.harness('cone', True)
+        h.estop = False
+        h.last_estop = time.monotonic()
+        h.controller.fresh = lambda key, now: True
+        h.controller.mode = 'cones'
+        h.controller.phase = 'cone_tracking'
+        h.controller.cone_scan_time = time.monotonic()
         Core.tick(h)
-        self.assertGreater(recorded[-1], 0.)
-        h.last_boxes = -float('inf')
+        self.assertGreater(output[-1].linear.x, 0.)
+        h.controller.cone_scan_time -= .31
         Core.tick(h)
-        self.assertEqual(recorded[-1], 0.)
-        self.assertEqual(recorded[-1], output[-1].linear.x)
+        self.assertEqual(output[-1].linear.x, 0.)
+        h.controller.cone_scan_time = time.monotonic()
+        h.controller.phase = 'cone_acquire'
+        Core.tick(h)
+        self.assertEqual(output[-1].linear.x, 0.)
 
 
 if __name__ == '__main__':

@@ -45,6 +45,8 @@ class Core(Node):
         self.cfg['end_stage'] = self.cfg['start_stage'] if self.cfg['stop_after_stage'] else 8
         self.course = Course(self.cfg)
         self.course.index = self.cfg['start_stage']-1
+        self.obstacle_sign_areas = self.cfg['class_min_areas'].copy()
+        self.obstacle_sign_areas[2:4] = [self.cfg['obstacle_direction_min_area']]*2
         self.tracker = SignTracker(self.cfg['min_confidence'], self.cfg['class_min_areas'],
                                    self.cfg['confirm_frames'], self.cfg['sign_timeout'])
         self.last_boxes = self.last_command = self.last_estop = -math.inf
@@ -85,7 +87,8 @@ class Core(Node):
 
     def on_boxes(self, msg):
         now = time.monotonic()
-        self.tracker.update(msg.bounding_boxes, now)
+        areas = self.obstacle_sign_areas if self.course.active.name == 'obstacle' else None
+        self.tracker.update(msg.bounding_boxes, now, areas)
         self.last_boxes = now
 
     def on_lidar_state(self, msg):
@@ -151,7 +154,7 @@ class Core(Node):
             'pedestrian_stop_and_wait_completed': '보행자 정지·3초 대기 후 차선 추종 20초 완료',
             'direction_sign_obstacle_exit': '갈림길 표지판 확인·장애물 미션 종료·방향 전달',
             'branch_turn_and_lane_reacquired': '갈림길 후 차선 추종 20초 연속 이동·대형 라바콘 5개 확인',
-            'cone_exit_and_lane_confirmed': '고정 조향 완료·정지 후 차선 획득 1초 확인',
+            'cone_exit_and_lane_confirmed': '라바콘 구간 종료·정지 후 차선 획득 1초 확인',
             'green_pixel_threshold_departure': '초록불 면적 기준 충족/차선 추종 복귀',
             't_parking_completed': '주차 경로/영역/자세/정지 조건 충족',
         }
@@ -224,6 +227,8 @@ class Core(Node):
         if control.mode == 'hold' and control.hold_reason not in ('', 'initial_hold', 'operator_hold'):
             self.fail(control.hold_reason)
             healthy = False
+        if not healthy and self.course.active.name == 'intersection':
+            self.course.active.clear_since = None
         if healthy and not self.course.finished:
             obs = Observation(now, control.travel, self.tracker.signs(now), control.lane,
                               tuple(control.obstacles.get('points', [])) if lidar_enabled else (), control.mode,
@@ -249,13 +254,16 @@ class Core(Node):
                 healthy = False
         Core.report_mission_events(self)
         output = Twist()
-        if (healthy and not self.fault and not self.course.finished and control.mode != 'hold'
+        cone_ready = (control.mode != 'cones' or
+                      (control.phase == 'cone_tracking' and
+                       now-control.cone_scan_time <= 0.3))
+        if (healthy and cone_ready and not self.fault and not self.course.finished and control.mode != 'hold'
                 and now-self.last_command <= self.cfg['input_timeout']
                 and all(math.isfinite(v) for v in (self.command.linear.x, self.command.angular.z))):
             output = self.command
         self.publisher.publish(output)
-        if hasattr(control, 'record_cone_output'):
-            control.record_cone_output(now, output)
+        if control.phase == 'branch_fixed_steering':
+            control.record_fixed_branch_output(now, output)
         progress = self.course.progress(Observation(now, control.travel)) if hasattr(self.course, 'progress') else {}
         self.status.publish(String(data=json.dumps(dict(
             stage=self.course.index+1, mission=self.course.active.name,

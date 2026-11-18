@@ -82,7 +82,7 @@ class CourseTests(unittest.TestCase):
         def observe(now, phase='cone_acquire', valid=True, speed=0.):
             return c.tick(Observation(now, signs=frozenset({7}), lane={'valid': valid},
                                       mode='cones', phase=phase, speed=speed))
-        self.assertFalse(observe(.1, phase='cone_right').done)
+        self.assertFalse(observe(.1, phase='cone_tracking').done)
         self.assertFalse(observe(.2, phase='cone_left').done)
         self.assertFalse(observe(.3, speed=.1).done)
         for step in range(10):

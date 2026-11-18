@@ -12,7 +12,7 @@ limo_control:
     rear_axle_offset: 0.1
     robot_front: 0.18
     robot_rear: 0.18
-    robot_width: 0.22
+    robot_width: 0.20
     safety_margin: 0.04
     geometry_verified: false
     auto_slow_sign: false

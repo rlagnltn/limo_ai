@@ -17,7 +17,8 @@ class YoloObjectDetectionNode(Node):
     def __init__(self):
         super().__init__('yolo_object_detection_node')
         
-        self.declare_parameter('model_weight_path', '')
+        self.declare_parameter('model_weight_path',
+                               '/home/wego/wego_ws/src/dl_ros2_application/weight/testv5.engine')
         self.declare_parameter('canonical_class_names', [''])
         self.canonical_names = self.get_parameter('canonical_class_names').value
         if self.canonical_names != [''] and len(self.canonical_names) != 8:

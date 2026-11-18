@@ -9,7 +9,7 @@ core:
     min_confidence: 0.7
     confirm_frames: 3
     # Areas in image pixels, ordered by YOLO class IDs 0..7.
-    class_min_areas: [2900.0, 2700.0, 1800.0, 1800.0, 6300.0, 6300.0, 1800.0, 1800.0]
+    class_min_areas: [2900.0, 2700.0, 1800.0, 1800.0, 4000.0, 3500.0, 4000.0, 1800.0]
     active_timeout: 120.0
 
 yolo_object_detection_node:

@@ -1,6 +1,6 @@
 """Source 파일로 차선 검출 + 신호등 제어 실행 (별도 colcon 빌드 불필요).
 
-카메라, YOLO(testv2.engine), 베이스는 별도로 실행한다.
+카메라, YOLO(testv5.engine), 베이스는 별도로 실행한다.
 """
 from pathlib import Path
 

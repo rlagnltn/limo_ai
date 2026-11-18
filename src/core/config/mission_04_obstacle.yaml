@@ -1,4 +1,8 @@
 # Automatic entry after mission 3; exit on one confirmed direction sign (ID 2/3).
+core:
+  ros__parameters:
+    obstacle_direction_min_area: 2000.0
+
 limo_control:
   ros__parameters:
     lane_change_distance: 1.2
