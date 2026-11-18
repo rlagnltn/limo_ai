@@ -1,10 +1,9 @@
 # limo_ai
 
-# 모든 터미널에 시작전
-
+#통합
 #source /opt/ros/humble/setup.bash
-
-#source ~/wego_ws/install/setup.bash
+source ~/wego_ws/install/setup.bash
+ros2 launch core bringup.launch.py
 
 # 1번 터미널
 
