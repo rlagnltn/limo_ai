@@ -1,0 +1,4 @@
+core:
+  ros__parameters:
+    # Red and green minimum areas are configured in course.yaml.
+    traffic_stopped_speed: 0.005

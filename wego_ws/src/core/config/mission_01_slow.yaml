@@ -1,0 +1,3 @@
+core:
+  ros__parameters:
+    slow_duration: 7.0

@@ -1,0 +1,4 @@
+core:
+  ros__parameters:
+    cone_exit_confirm: 1.0
+    cone_slow_sign_min_area: 2800.0

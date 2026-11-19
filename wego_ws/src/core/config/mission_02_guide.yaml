@@ -1,0 +1,4 @@
+core:
+  ros__parameters:
+    # Measure slow lane-following distance from the shared stop-line detection.
+    guide_distance: 1.6

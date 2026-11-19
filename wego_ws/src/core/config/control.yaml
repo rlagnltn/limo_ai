@@ -1,0 +1,29 @@
+limo_control:
+  ros__parameters:
+    default_speed: 0.6
+    max_speed: 0.8
+    slow_speed: 0.2
+    uncertain_speed: 0.2
+    p_gain: 0.003
+    d_gain: 0.0002
+    heading_gain: 0.25
+    wheelbase: 0.2
+    max_steering_angle: 0.35
+    rear_axle_offset: 0.1
+    robot_front: 0.18
+    robot_rear: 0.18
+    robot_width: 0.20
+    safety_margin: 0.04
+    geometry_verified: false
+    auto_slow_sign: false
+    auto_obstacle_mode: false
+    require_ackermann: false
+    command_control_mode: 1
+    require_path_coverage_for_lane_follow: true
+    # Limited single-lane test crawl when scan coverage is partial, not when hits block the path.
+    allow_sparse_scan_crawl: false
+    sparse_scan_speed: 0.05
+    sensor_timeout: 0.5
+    stop_line_margin: 0.1
+    mission_timeout: 15.0
+    lap_timeout: 0.0  # Disable the overall run time limit.
