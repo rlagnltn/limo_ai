@@ -11,70 +11,35 @@ sys.path.insert(0, str(Path(__file__).parents[2] / 'line_slow'))
 sys.path.insert(0, str(Path(__file__).parents[1]))
 from limo_control import LimoControl
 from core.parking_path import t_parking_path
+from geometry_msgs.msg import Twist
 from std_msgs.msg import String
 
 
 class ControllerTests(unittest.TestCase):
-    def cone_harness(self):
-        h = SimpleNamespace(mode='cones', phase='cone_right', cone_segment_elapsed=0.,
-                            cone_output_time=None, cone_output_phase=None, cone_output_active=False,
-                            vehicle_motion_mode=1, cfg=dict(cone_right_degrees=10., cone_left_degrees=15.,
-                            cone_right_seconds=2., cone_left_seconds=2., cone_speed=.3, wheelbase=.2))
-        return h
+    def test_cone_scan_requires_three_entry_and_five_exit_frames(self):
+        from cone_follow import ConeFollower, ModeMachine, Params, Plan
+        from sensor_msgs.msg import LaserScan
 
-    def test_forced_cone_angles_and_two_timed_segments_then_stop(self):
-        from geometry_msgs.msg import Twist
-        h = self.cone_harness()
-        now = 0.
-        for phase, expected_degrees in (('cone_right', -10.), ('cone_left', 15.)):
-            self.assertEqual(h.phase, phase)
-            for step in range(42):
-                speed, curvature, reason = LimoControl.forced_cone_control(h)
-                if reason != phase:
-                    break
-                self.assertAlmostEqual(speed, .3)
-                self.assertAlmostEqual(math.degrees(math.atan(curvature*.2)), expected_degrees)
-                command = Twist()
-                command.linear.x, command.angular.z = speed, speed*curvature
-                LimoControl.record_cone_output(h, now, command)
-                now += .05
-            else:
-                self.fail('Cone segment did not finish after two seconds of issued output')
-            if phase == 'cone_right':
-                self.assertEqual(h.phase, 'cone_left')
-        self.assertEqual(h.phase, 'cone_acquire')
-        self.assertEqual(LimoControl.forced_cone_control(h)[:2], (0., 0.))
-
-    def test_forced_cone_does_not_count_core_blocks_or_wrong_steering(self):
-        from geometry_msgs.msg import Twist
-        h = self.cone_harness()
-        zero = Twist()
-        for step in range(100):
-            LimoControl.record_cone_output(h, step*.05, zero)
-        self.assertEqual(h.cone_segment_elapsed, 0.)
-        wrong = Twist()
-        wrong.linear.x = .3
-        LimoControl.record_cone_output(h, 5., wrong)
-        LimoControl.record_cone_output(h, 5.05, wrong)
-        self.assertEqual(h.cone_segment_elapsed, 0.)
-        self.assertEqual(LimoControl.forced_cone_control(h)[2], 'cone_right')
-        h.vehicle_motion_mode = 0
-        self.assertEqual(LimoControl.forced_cone_control(h)[0], 0.)
-
-    def test_forced_cone_drives_without_scan_or_lane_detection_but_requires_fresh_camera(self):
-        h = self.cone_harness()
-        h.cfg.update(command_control_mode=1, command_mode_settle=.2, lap_timeout=600.)
-        h.vehicle_control_mode, h.command_ready_since = 1, 0.
-        h.lidar_enabled, h.e_stop_flag = False, True
-        h.vehicle_ok, h.odom_fault, h.started_at = True, False, None
-        h.travel, h.phase_travel, h.mission_distance = 0., 0., None
-        h.lane = {'valid': False}
-        h.fresh = lambda key, now: key not in ('obstacles', 'e_stop')
-        h.get_parameter = lambda name: SimpleNamespace(value=True)
-        h.forced_cone_control = lambda: LimoControl.forced_cone_control(h)
-        self.assertEqual(LimoControl.compute_control(h, 10., .05)[0], .3)
-        h.fresh = lambda key, now: key != 'lane'
-        self.assertEqual(LimoControl.compute_control(h, 10., .05)[0], 0.)
+        follower = ConeFollower(Params())
+        h = SimpleNamespace(mode='cones', phase='cone_waiting_for_rows',
+                            cone_follower=follower, cone_mode=ModeMachine(follower.p),
+                            cone_scan_time=-math.inf, vehicle_motion_mode=1,
+                            get_clock=lambda: SimpleNamespace(now=lambda: SimpleNamespace(nanoseconds=10**9)))
+        scan = LaserScan()
+        scan.header.stamp.sec = 1
+        scan.ranges = [1.]
+        present = Plan(v=.15, k=1.9, both_near=True, cones_ahead=2, reason='both')
+        absent = Plan(reason='no_cones')
+        with patch.object(follower, 'update', side_effect=[present]*3+[absent]*5):
+            for i in range(3):
+                LimoControl.cone_scan_callback(h, scan)
+                self.assertEqual(LimoControl.cone_control(h, h.cone_scan_time)[:2],
+                                 (.15, 1.9) if i == 2 else (0., 0.))
+            self.assertEqual(LimoControl.cone_control(h, h.cone_scan_time+.31)[:2], (0., 0.))
+            for i in range(5):
+                LimoControl.cone_scan_callback(h, scan)
+                self.assertEqual(h.phase, 'cone_acquire' if i == 4 else 'cone_tracking')
+            self.assertEqual(LimoControl.cone_control(h, h.cone_scan_time)[:2], (0., 0.))
 
     def test_odometry_stop_accepts_unverified_camera_geometry_but_requires_odometry(self):
         for fresh in (True, False):
@@ -93,11 +58,11 @@ class ControllerTests(unittest.TestCase):
                 self.assertEqual(h.mode, 'follow')
                 self.assertIn('fresh odometry', h.last_command_error)
 
-    def test_pedestrian_confirms_stop_then_waits_three_seconds(self):
+    def test_pedestrian_confirms_stop_then_waits_four_seconds(self):
         cfg = dict(command_control_mode=1, command_mode_settle=.2, lap_timeout=600.,
                    default_speed=.3, max_speed=.3, uncertain_speed=.12,
                    slow_speed=.2, auto_obstacle_mode=False, stopped_speed=.005,
-                   pedestrian_wait=3., mission_timeout=15., stop_tolerance=.02,
+                   pedestrian_wait=4., mission_timeout=15., stop_tolerance=.02,
                    stop_confirm_time=.2)
         h = SimpleNamespace(cfg=cfg, mode='pedestrian', phase='approach_stop',
                             phase_travel=0., travel=.45, vehicle_control_mode=1,
@@ -121,8 +86,8 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(h.compute_control(10.,.05)[0], 0.)
         self.assertEqual(h.compute_control(10.21,.05)[0], 0.)
         self.assertEqual(h.phase,'waiting')
-        self.assertEqual(h.compute_control(13.20,.05)[0], 0.)
-        self.assertGreater(h.compute_control(13.22,.05)[0], 0.)
+        self.assertEqual(h.compute_control(14.20,.05)[0], 0.)
+        self.assertGreater(h.compute_control(14.22,.05)[0], 0.)
         self.assertEqual(h.mode,'follow')
 
     def test_requested_cruise_slow_and_low_confidence_speeds(self):
@@ -146,6 +111,8 @@ class ControllerTests(unittest.TestCase):
         h.steering_curvature = lambda *args: 2.
         h.mode, h.lane['confidence'] = 'follow', 1.
         self.assertAlmostEqual(LimoControl.compute_control(h, 10., .05)[0], .8/2.8)
+        h.cfg['lap_timeout'], h.started_at = 0., 0.
+        self.assertAlmostEqual(LimoControl.compute_control(h, 601., .05)[0], .8/2.8)
         h.mode, h.lane['confidence'] = 'slow', .7
         self.assertAlmostEqual(LimoControl.compute_control(h, 10., .05)[0], .2)
         # Fixed slow setpoint must not bypass stale-camera or vehicle-fault stops.
@@ -154,6 +121,35 @@ class ControllerTests(unittest.TestCase):
         h.fresh = lambda key, now: True
         h.vehicle_ok = False
         self.assertEqual(LimoControl.compute_control(h, 10., .05)[0], 0.)
+
+    def test_team_lane_candidate_respects_slow_cap_stop_and_freshness(self):
+        command = Twist()
+        command.linear.x, command.angular.z = .25, -.125
+        control = SimpleNamespace(
+            cfg=dict(command_control_mode=1, command_mode_settle=.2, lap_timeout=600.,
+                     slow_speed=.2),
+            mode='follow', phase='running', phase_travel=0., travel=0.,
+            vehicle_control_mode=1, command_ready_since=0., lidar_enabled=False,
+            vehicle_ok=True, odom_fault=False, started_at=None, mission_distance=None,
+            lane=dict(valid=False), use_team_lane=True, team_lane_command=command,
+            slow_sign_until=None, slow_until=0.,
+            get_parameter=lambda name: SimpleNamespace(value=True),
+            fresh=lambda key, now: True,
+        )
+        self.assertEqual(LimoControl.compute_control(control, 10., .05),
+                         (.25, -.5, 'team_lane_follow'))
+        control.mode = 'slow'
+        self.assertEqual(LimoControl.compute_control(control, 10., .05),
+                         (.2, -.5, 'team_lane_follow'))
+        command.linear.x = -.05
+        self.assertEqual(LimoControl.compute_control(control, 10., .05),
+                         (-.05, 0., 'team_lane_reverse_search'))
+        command.linear.x = 0.
+        self.assertEqual(LimoControl.compute_control(control, 10., .05),
+                         (0., 0., 'team_lane_stop'))
+        control.fresh = lambda key, now: key != 'team_lane'
+        self.assertEqual(LimoControl.compute_control(control, 10., .05),
+                         (0., 0., 'team_lane_stale_or_missing'))
 
     def test_lidar_disabled_does_not_require_scan_or_lidar_stop_heartbeat(self):
         cfg = dict(command_control_mode=1, command_mode_settle=.2, lap_timeout=600.,
@@ -204,40 +200,45 @@ class ControllerTests(unittest.TestCase):
                 error_code=1, motion_mode=motion_mode, control_mode=1))
             self.assertFalse(h.vehicle_ok)
 
-    def test_branch_direction_requires_measured_yaw_and_exit(self):
+    def test_branch_fixed_steering_then_resumes_team_lane_without_legacy_lane(self):
         for mode, sign in (('branch_a', 1), ('branch_b', -1)):
             cfg = dict(command_control_mode=1, command_mode_settle=.2, lap_timeout=600.,
-                       geometry_verified=True, branch_approach=.2, branch_angle=.7,
-                       branch_yaw_tolerance=.08, branch_speed=.08, branch_curvature=1.5,
-                       branch_exit_distance=.3, default_speed=.15, max_speed=.25,
+                       geometry_verified=False, default_speed=.15, max_speed=.8, wheelbase=.2,
                        uncertain_speed=.06, slow_speed=.08, auto_obstacle_mode=False)
-            h = SimpleNamespace(cfg=cfg, mode=mode, phase='turning', phase_heading=0.,
-                                phase_travel=0., travel=.4, pose=(.4,0,0),
-                                vehicle_control_mode=1, command_ready_since=0.,
-                                e_stop_flag=False, vehicle_ok=True, odom_fault=False,
-                                started_at=0., mission_distance=None, stop_target=None,
-                                lane=dict(valid=True, confidence=1.),
-                                slow_sign_until=None, slow_until=0., multi_frames=0,
+            h = SimpleNamespace(cfg=cfg, mode=mode, phase='branch_fixed_steering',
+                                branch_fixed_elapsed=0., branch_fixed_output_at=None,
+                                phase_travel=0., travel=0., vehicle_control_mode=1,
+                                command_ready_since=0., e_stop_flag=False, vehicle_ok=True,
+                                odom_fault=False, started_at=0., mission_distance=None,
+                                stop_target=None, lane={'valid': False}, slow_sign_until=None,
+                                slow_until=0., multi_frames=0,
                                 get_parameter=lambda name: SimpleNamespace(value=True),
-                                fresh=lambda *args: True,
-                                steering_curvature=lambda *args: 0.)
-            def enter(new_mode, now):
-                h.mode, h.phase = new_mode, 'running'
-                h.phase_travel = h.travel
-            h._enter = enter
-            v,k,reason = LimoControl.compute_control(h, 10., .05)
-            self.assertGreater(v, 0)
-            self.assertEqual(k, sign*1.5)
-            # Travel without turning must not finish the intersection.
-            h.travel = 2.
-            LimoControl.compute_control(h, 11., .05)
-            self.assertEqual(h.phase, 'turning')
-            h.pose = (2., 0., sign*.7)
-            LimoControl.compute_control(h, 12., .05)
-            self.assertEqual(h.phase, 'reacquire')
-            h.travel = 2.4
-            LimoControl.compute_control(h, 13., .05)
+                                fresh=lambda *args: True, steering_curvature=lambda *args: 0.)
+            h.fixed_branch_curvature = lambda: LimoControl.fixed_branch_curvature(h)
+            h._enter = lambda mode, now: setattr(h, 'mode', mode)
+            speed, curvature, reason = LimoControl.compute_control(h, 10., .05)
+            self.assertEqual((speed, reason), (.3, 'branch_fixed_steering'))
+            self.assertAlmostEqual(math.degrees(math.atan(curvature*.2)), sign*15.)
+            command = Twist()
+            command.linear.x, command.angular.z = speed, speed*curvature
+            LimoControl.record_fixed_branch_output(h, 0., command)
+            LimoControl.record_fixed_branch_output(h, .05, Twist())
+            LimoControl.record_fixed_branch_output(h, .1, command)
+            self.assertEqual(h.branch_fixed_elapsed, 0.)
+            for step in range(2, 31):
+                LimoControl.record_fixed_branch_output(h, step/10, command)
+            self.assertEqual(LimoControl.compute_control(h, 10., .05)[2],
+                             'branch_fixed_steering')
+            LimoControl.record_fixed_branch_output(h, 3.15, command)
+            h.use_team_lane = True
+            h.team_lane_command = Twist()
+            h.team_lane_command.linear.x = .15
+            self.assertEqual(LimoControl.compute_control(h, 10., .05),
+                             (.15, 0., 'team_lane_follow'))
             self.assertEqual(h.mode, 'follow')
+            h.team_lane_command.linear.x = 0.
+            self.assertEqual(LimoControl.compute_control(h, 10.05, .05),
+                             (0., 0., 'team_lane_stop'))
 
     def test_parking_blocked_path_produces_zero(self):
         h = SimpleNamespace(

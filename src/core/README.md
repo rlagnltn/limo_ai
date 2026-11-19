@@ -20,7 +20,7 @@ source install/setup.bash
 # 터미널 1: 기존 센서/차체 브링업
 ros2 launch wego teleop_launch.py
 
-# 터미널 2: 차선 검출. 여기서는 모터 명령을 보내지 않는다.
+# 터미널 2: 미션용 차선 정보와 기본 차선 주행 명령 후보
 ros2 launch core lane.launch.py
 
 # 터미널 3: YOLO와 미션별 LiDAR 모터 시작/정지 관리.
@@ -34,13 +34,18 @@ ros2 run core core.core
 함께 실행하지 않는다. 코어만 `/cmd_vel`을 발행한다. 내부 제어기는
 `/core/control_cmd`, LiDAR 노드는 `/e_stop`과 `/core/emergency_cmd`를 발행한다.
 카메라/차체 입력이나 속도 후보가 끊기면 코어가 정지한다.
-LiDAR 데이터와 LiDAR 정지 heartbeat는 4번 장애물 회피에서만 요구한다.
+LiDAR 데이터와 LiDAR 정지 heartbeat는 4번 장애물 회피, 6번 라바콘, 8번 전면 주차 중에 요구한다.
+
+기본 추종과 감속 추종에는 팀원 `simple_lane`이 압축 카메라 영상으로 계산한
+`/core/lane_cmd`를 사용한다. 튜닝 초기값은 `config/simple_lane_tune_v9.json`에 있다.
+감속 구간에서는 기존 감속 상한을 적용하며, 최종 속도·곡률 제한과 차량 상태 검사는
+코어의 제어 경로에서 적용한다. 기존 `/lane_state` 검출기는 미션용 차선 및 정지선 정보를
+계속 공급한다. 표준 코어 브링업에서는 `/cmd_vel`을 사용한다.
 
 ## LiDAR 모터 사용 구간
 
 브링업은 `auto_start: false`로 모터를 정지시킨 채 서비스 요청을 기다린다.
-현재 코드 4번 장애물 회피 미션에서만 모터/스캔을 시작한다.
-6번 라바콘은 LiDAR 없이 고정 조향 동작 후 정지 상태에서 차선을 재획득한다.
+4번 장애물 회피와 6번 라바콘에 진입할 때, 8번에서는 주차 표지판이 확정된 뒤 모터/스캔을 시작한다.
 나머지 구간은 모터와 스캔을 정지하고 LiDAR 장애물/미관측/비상정지 조건을 주행에 적용하지 않는다.
 모터 상태 전환 확인 중에는 차량이 정지한다. 켤 때는 새로운 스캔이 들어와야 회피를 시작한다.
 코어 종료 후 요구 heartbeat가 끊기면 모터를 정지한다.
@@ -54,14 +59,15 @@ LiDAR 데이터와 LiDAR 정지 heartbeat는 4번 장애물 회피에서만 요�
 
 |단계|Python (`core/missions/`)|YAML (`config/`)|시작과 완료|
 |---|---|---|---|
-|1 방지턱 서행|mission_01_slow.py|mission_01_slow.yaml|class 5 확인 → 감속 → 0.6m 이상·5초 이상 경과 및 표지판 0.5초 미검출|
-|2 서행 유도선|mission_02_guide.py|mission_02_guide.yaml|ID 5 재인식(6300px² 이상) → 저속 차선 추종 → 1.8m 통과|
-|3 보행자|mission_03_pedestrian.py|mission_03_pedestrian.yaml|class 4 → 즉시 정지 → 정지 확인 후 3초 대기 → 차선 추종 복귀 후 20초 → 4번|
-|4 3차선 장애물|mission_04_obstacle.py|mission_04_obstacle.yaml|3번 후 자동 진입 → LiDAR 회피 → ID 2/3 단일 방향 확인으로 종료·5번에 방향 전달. 거리·차선수 종료 조건 없음|
-|5 갈림길|mission_05_intersection.py|mission_05_intersection.yaml|class 2 좌/class 3 우 → 회전·출구 거리 → 유효한 차선 추종으로 20초 연속 전진한 뒤 8000px² 이상 class 7 동시 5개 검출 → 6번|
-|6 라바콘|mission_06_cone.py|mission_06_cone.yaml|5번 완료 후 자동 진입 → 오른쪽 조향10°·0.3m/s·2초 → 왼쪽15°·0.3m/s·2초 → 정지 → 유효한 차선1초 연속 확인 → 7번. LiDAR/후진/거리 종료 없음|
-|7 횡단보도/신호등|mission_07_traffic.py|mission_07_traffic.yaml|횡단보도 또는 신호등 감지 → class 0 면적 2900px² 이상 즉시 정지 → class 1 면적 2700px² 이상 차선 복귀. 동시 검출은 빨강 우선|
-|8 T자 주차|mission_08_parking.py|mission_08_parking.yaml|class 6 → 전진 정렬·정지·후진 원호·후진 직선 → 주차 영역/자세/정지 확인|
+|1 방지턱 서행|mission_01_slow.py|mission_01_slow.yaml|class 5 확인 → 감속 → 서행 시작 후 7초 경과|
+|2 서행 유도선|mission_02_guide.py|mission_02_guide.yaml|2번 진입 후 새 정지선 검출(하단 ROI 흰색 20% 이상) → 저속 차선 추종 → 검출 지점부터 1.6m 통과|
+|3 보행자|mission_03_pedestrian.py|mission_03_pedestrian.yaml|class 4(4100px² 이상) → 즉시 정지 → 정지 확인 후 4초 대기 → 차선 추종 재개 3초 후 정지선 대기|
+|4 3차선 장애물|mission_04_obstacle.py|mission_04_obstacle.yaml|3번 완료 뒤 새 정지선 검출 → LiDAR 회피 → ID 2/3 단일 방향 확인(4300px² 이상)으로 종료·5번에 방향 전달. 방향 표지판 대기 시간 제한 없음|
+|5 갈림길|mission_05_intersection.py|mission_05_intersection.yaml|class 2 좌/class 3 우(직접 검출 4400px² 이상) → 해당 방향 15° 고정 조향으로 0.3m/s 전진 3초 → 즉시 차선 추종 모드로 복귀 → 같은 YOLO 프레임에서 26000px² 이상 class 7을 1개 이상 검출하면 6번|
+|6 라바콘|mission_06_cone.py|mission_06_cone.yaml|5번 완료 후 자동 진입 → LiDAR 양쪽 콘 줄 3스캔 확인 → 통로 중앙 추종 → 전방 콘 미검출 5스캔 확인 → 실제 정지 1초 후 일반 차선 추종 → 서행 표지판 ID 5(3500px² 이상) 검출 시 6.5번|
+|6.5 라바콘 후 서행|mission_06_cone.py|control.yaml|6번 종료와 동시에 0.2m/s 이하로 서행 → 빨간불 또는 초록불 검출 시 미션 완료 및 신호를 7번으로 전달. 정지와 출발 판정은 7번에서 수행|
+|7 신호등|mission_07_traffic.py|mission_07_traffic.yaml|면적 기준을 충족한 신호등(class 0 또는 1) 감지 시 정지 → 실제 정지 후 초록불만 감지되면 차선 추종 복귀. 동시 검출은 빨강 우선|
+|8 T자 주차|mission_08_parking.py|mission_08_parking.yaml|class 6 → LiDAR로 A줄 빈 칸 탐색 → 전면 진입 → 완료 후 정지|
 
 앞 단계에서 발견한 다른 표지판은 미션을 바꾸지 않는다. 단계 전환 시 검출 확인
 카운터를 초기화한다. 주차 표지판은 8단계에서만 처리한다.
@@ -71,15 +77,15 @@ LiDAR 데이터와 LiDAR 정지 heartbeat는 4번 장애물 회피에서만 요�
 공통 파일:
 
 - `config/course.yaml`: 시작 단계, 단독 테스트 모드, YOLO 신뢰도/클래스별 픽셀 면적,
-  연속 검출 프레임 수, 타임아웃, 클래스명 연결.
+  연속 검출 프레임 수, 입력 유효 시간, 클래스명 연결.
 - `config/control.yaml`: 차선 추종 속도·게인·차체 치수·Ackermann 설정·보정 확인.
   `require_ackermann: false`가 기본이다. 단, 바퀴 조향각을 사용하는 6번은 motion_mode=1(Ackermann)을 요구한다.
 - `config/lane.yaml`: ROI/HLS 색상 필터·카메라→지면 호모그래피.
 - `config/lidar.yaml`: LiDAR/TF frame·스캔 유효성·차체 치수·정지 거리 여유.
 - `../line_slow/detect_line.py`: 차선/3차선/정지선/횡단보도 영상 처리.
-- `../line_slow/limo_control.py`: 기존 제어기. `lane_change_curvature`, `forced_cone_control`,
-  `compute_control` 내 branch 모드, `parking_control`이 실제 조향 계산을 한다.
-- `core/parking_path.py`: T자 주차 경로 생성.
+- `../line_slow/limo_control.py`: 기존 제어기. `lane_change_curvature`, `cone_control`,
+  `compute_control` 내 branch 모드가 갈림길 조향을 계산한다.
+- `vendor/jetracer_ros2/`: 8번 전면 T주차 알고리즘과 ROS 노드 원본.
 
 설정 디렉터리는 소스 `~/wego_ws/src/core/config/`가 있으면 그곳을 우선 사용하고,
 배포 환경에서는 설치된 `share/core/config/`를 사용한다. `CORE_CONFIG_DIR`로 바꿀 수 있다.
@@ -97,26 +103,25 @@ CLI의 `--ros-args -p 이름:=값` 또는 마지막 `--params-file`은 기본 �
   호모그래피는 전체 영상 픽셀 [u,v,1]을 base_link 지면 [전방m,왼쪽m,1]로 보낸다.
   `calibration_width/height`는 측정에 쓴 영상 해상도다. 기본 0 행렬은 유효한 보정이 아니다.
 - 방지턱 노면 문구는 YOLO class 5가 검출해야 한다. 별도 OCR은 없다.
-  유도선 전용 검출기는 없고, 2번 단계에서 ID 5 인식 후 `guide_distance`만큼 저속 차선 추종한다.
+  2번은 4번 진입과 같은 `detect_stopline.py`를 사용한다. 2번 진입 뒤 새 정지선을 검출한
+  위치부터 `guide_distance`만큼 저속 차선 추종한다.
 - 보행자 미션은 표지판 확인 즉시 속도 0을 명령한다. 오도메트리로 실제 정지를
-  확인한 뒤 3초 대기하고 출발한다. 정지선 탐색이나 추가 이동 거리는 사용하지 않는다.
-- 신호등 미션은 빨간불 박스 면적 2900px² 이상에서 즉시 정지하고, 실제 정지 후 초록불 2700px² 이상에서 차선 추종으로 복귀한다. 보행자(class 4)·서행(class 5)은 6300px² 이상, 나머지 class 2/3/6/7은 1800px² 이상을 인식 조건으로 쓴다. 면적은 (xmax-xmin)×(ymax-ymin)이며 기존 신뢰도 0.7·초록 및 일반 표지판 3프레임 확인 조건도 적용한다.
+  확인한 뒤 4초 대기한다. 차선 추종 재개 3초 후 미션을 완료하고 정지선 감지를 켠다.
+  새 정지선이 감지되면 4번으로 진입한다.
+- 표지판과 신호등의 공통 면적 기준은 `config/course.yaml`에 있다. 면적은
+  (xmax-xmin)×(ymax-ymin)이며 신뢰도 0.7 이상과 1프레임 확인이 기본이다.
 - 3차선 회피는 실제 길이 단위 차선 중심/도로 경계가 필요하다. 종료는 갈림길 표지판(ID2/3) 확인이다.
-- 6번 조향각은 가상 중앙 바퀴 기준이며 `tan(angle)/wheelbase`를 통해 cmd_vel로 변환한다.
-  실제 바퀴각은 차체의 Ackermann 변환/보정과 기구에 따라 달라 실차 확인이 필요하다.
-  각2초는 최종 core 출력의 해당 조향 전진 명령 시간을 누적한다(주기 약0.05초).
-  입력오류/제어권상실 등으로 core가 속도0을 내보내는 동안은 누적하지 않는다.
-  출발 가속 제한은 유지하며 고정 조향 구간에는 일반 차선 커브 감속/조향 변화율 제한을 적용하지 않는다.
-  고정 동작 후 실제속도<=0.005m/s와 유효한 차선을1초 연속 확인한다.
-  차선검출실패/미션관측공백은 확인 시간을 초기화한다. 카메라/odom/차체 freshness 검사는 계속 유지한다.
-- 갈림길은 표지판 방향 + 일정 곡률/오도메트리 회전각으로 주행한다.
-  분기 도로 지도를 생성하거나 주행 가능 영역을 영상으로 완전히 분할하지 않는다.
-- T자 주차는 표지판 확인 시 로봇 위치를 기준으로 생성한 시험 경로다.
-  빈 주차 공간의 자동 측정/인식은 없다. `parking_approach/radius/reverse/box`를 실제
-  주차 위치에 맞춘다. 우측이 기본이며 좌측은 side와 box의 y 범위를 함께 바꾼다.
-  경로는 차량 최소 회전 반경을 검사하고, 전진→후진 전 실제 정지를 확인한다.
-  주차 구간은 사용자 지정에 따라 LiDAR를 사용하지 않으며, 경로·오도메트리·주차 영역 조건으로 제어한다.
-- stage timeout/경로 막힘/센서 문제는 `/core/status`와 `/mission_status`에서 확인한다.
+- 6번은 실차 단독 테스트의 `ConeFollower`와 `ModeMachine`을 사용한다.
+  6번 진입 후 양쪽 콘 줄을 연속 3스캔 확인할 때까지 정지한다. 전방 콘이 연속
+  5스캔 검출되지 않으면 정지하고 실제 속도 절댓값 ≤0.005m/s가 1초 유지된 뒤 일반 차선 추종으로 전환한다.
+  스캔이 0.3초 이상 끊기면 주행 명령을 정지한다. 미션 관측이 끊기면 정지 확인 시간을 초기화한다.
+- 갈림길은 표지판 방향으로 15° 조향을 고정하고 0.3m/s 전진 명령을 총 3초 보낸다.
+  이후 즉시 차선 추종 모드로 복귀하고, 차선이 없을 때는 추종기의 정지 조건을 적용한다.
+- 8번은 해당 단계에서 주차 표지판 ID 6이 5000px² 이상으로 직접 검출되면 시작한다. LiDAR와 오도메트리로 A1·A2·A3 중 빈 칸을 찾아 전면 진입한다.
+  원본의 ROS 노드와 주차 설정을 사용하고, 코어는 Ackermann 모드와 주행 입력을 확인한 뒤 주차 명령을 최종 `/cmd_vel`로 전달한다.
+  주차 상태와 상세 판정은 `/mission/parking/state`, `/mission/parking/debug`에서 확인한다.
+- 미션별 경과 시간과 코스 전체 시간에 상한을 두지 않는다. 경로 막힘, 센서 문제, 주행 진척 없음은
+  `/core/status`와 `/mission_status`에서 확인한다.
 
 ## 미션 하나만 테스트
 
@@ -140,7 +145,7 @@ ros2 topic echo /mission_status
 ## 미션 진행/완료 확인
 
 카메라 창에 현재 미션/진행 상태, 이동 거리, 실제 속도, 8개 미션별 WAIT/RUN/DONE/FAIL,
-마지막 완료 판정 이유를 표시한다. YOLO 박스 면적도 px²로 표시한다.
+마지막 완료 판정 이유를 표시한다. 6.5번도 별도 상태로 표시되며, YOLO 박스 면적은 px²로 표시한다.
 4번 코어 터미널에는 `[미션 1/8 방지턱 서행] 완료 판정 | ...` 형태로 판정 근거를 출력한다.
 
 `DONE`은 코드의 완료 조건을 만족했다는 뜻이다. 실제 코스에서 정확한 위치에 정지했는지,
@@ -163,5 +168,5 @@ source ~/wego_ws/install/setup.bash
 ```
 
 ROS 노드/소켓 없이 미션 재생, 잘못된 단계의 표지판 무시, 검출 확인/만료,
-신호등 정지 우선, 갈림길 방향 충돌, 종료 타임아웃, 주차 기하 및 실제 주차 제어기의
+신호등 정지 우선, 갈림길 방향 충돌, 미션 종료 트리거, 주차 기하 및 실제 주차 제어기의
 좌우 T자 경로 추종을 검사한다. 운동학 테스트는 타이어 미끄러짐·센서 오차·실제 충돌을 모델링하지 않는다.

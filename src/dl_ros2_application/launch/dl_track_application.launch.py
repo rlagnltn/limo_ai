@@ -7,7 +7,7 @@ def generate_launch_description():
     pkg_share_dir = get_package_share_directory('dl_ros2_application')
     params_file_path = os.path.join(pkg_share_dir, 'params', 'params.yaml')
     track_weight_file_path = '/home/wego/wego_ws/src/dl_ros2_application/weight/dl_drive.engine'
-    object_weight_file_path = '/home/wego/wego_ws/src/dl_ros2_application/weight/best.engine'
+    object_weight_file_path = '/home/wego/wego_ws/src/dl_ros2_application/weight/testv5.engine'
     return LaunchDescription([
         Node(
             package='dl_ros2_application',

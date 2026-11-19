@@ -93,6 +93,22 @@ class DetectLine(Node):
         self.reference_distance = self.get_parameter('reference_distance')
         self.declare_parameter('lane_width_ratio', 0.75)
         self.declare_parameter('left_only_center_bias', 0.0)
+        # [주차 전 커브] 옆 도로 노란선과 내 차선 노란선 사이의 좁은 틈을
+        # 차선으로 잡지 않도록, 기준 1차선 폭의 이 비율보다 좁은 쌍은 버린다.
+        self.declare_parameter('min_pair_width_ratio', 0.6)
+        # 같은 쪽에 노란선 2개가 (차선폭 x 이 비율) 이내로 붙어 보이면
+        # 차에 더 가까운(안쪽) 선을 내 차선 경계로 쓴다.
+        self.declare_parameter('double_line_gap_ratio', 0.5)
+        # [3차선 진입] 한쪽 선만 보일 때 그 선이 바깥으로 꺾여 벌어지면
+        # (도로 확장) 따라가지 않는다. 0이면 비활성.
+        self.declare_parameter('flare_reject_ratio', 0.03)
+        self.declare_parameter('flare_hold_sec', 3.0)
+        # [3차선 구간] 차량 좌우의 흰 점선 2줄이 보이면 그 사이를 따라간다.
+        self.declare_parameter('follow_white_dashes', True)
+        self.base_width_profile = None
+        self.flare_side = None
+        self.flare_trace = None
+        self.flare_until = 0.0
         self.lane_geometry = None
         self.lane_center = None
         self.lane_width = None
@@ -252,6 +268,95 @@ class DetectLine(Node):
         state['offset'] = int(round(reference_x-cx))
         return state
 
+    # 차선이 원래 휘거나 갈라지거나, 차선 변경 중인 모드에서는 보호 로직을 끈다.
+    GUARD_EXEMPT_MODES = frozenset(('guide', 'branch_a', 'branch_b', 'cones',
+                                    'parking', 'obstacles'))
+
+    def current_mode(self, now=None):
+        now = time.monotonic() if now is None else now
+        if self.controller_received_at is None or now-self.controller_received_at >= 0.5:
+            return None
+        return self.controller_status.get('mode')
+
+    def reject_flare(self, side, fit, points, width, height, now):
+        """한쪽 선만 보일 때, 그 선이 차 바깥쪽으로 꺾이면(3차선 진입처럼 도로가
+        넓어지는 곳) 꺾이기 전 직선 부분만 쓰고, 잠시 그 선을 유지한다.
+        커브의 바깥선은 화면 위쪽에서 안쪽으로 휘므로 여기에 걸리지 않는다."""
+        tol = max(6.0, width*float(self.get_parameter('flare_reject_ratio').value))
+        if side == 'left':
+            def outward(x, ref):
+                return x < ref-tol
+        else:
+            def outward(x, ref):
+                return x > ref+tol
+        values = sorted(points, key=lambda p: -p[1])  # 아래(가까운) 행부터
+        near_count = max(3, len(values)//2)
+        near_fit, _ = self.fit_boundary(values[:near_count], width)
+        if near_fit is not None:
+            far_out = [p for p in values[near_count:]
+                       if outward(p[0], np.polyval(near_fit, p[1]))]
+            if len(far_out) >= 3:
+                kept = [p for p in values if not outward(p[0], np.polyval(near_fit, p[1]))]
+                refit, _ = self.fit_boundary(kept, width)
+                if refit is not None:
+                    self.flare_side, self.flare_trace = side, refit
+                    self.flare_until = now+float(self.get_parameter('flare_hold_sec').value)
+                    return refit, ' | flare rejected'
+        if (self.flare_side == side and self.flare_trace is not None and
+                now < self.flare_until):
+            probe = height*0.85
+            if outward(float(np.polyval(fit, probe)), float(np.polyval(self.flare_trace, probe))):
+                return self.flare_trace, ' | flare hold'
+            self.flare_trace = fit
+        return fit, ''
+
+    def lane_width_at(self, y, image_width):
+        for profile in (self.base_width_profile, self.width_profile):
+            if profile is not None:
+                return float(np.clip(np.polyval(profile, y), image_width*0.18, image_width*1.8))
+        ratio = float(np.clip(self.get_parameter('lane_width_ratio').value, 0.25, 0.98))
+        return image_width*ratio
+
+    def white_dash_lane(self, hls, reference_x):
+        """차량 좌우로 가장 가까운 흰 세로 점선 2줄 사이를 차선으로 본다.
+        횡단보도처럼 흰색이 넓게 깔린 행은 쓰지 않고, 두 선 간격이 1차선 폭과
+        비슷할 때만 인정한다. 반환: (중심x, heading_error, y, 왼쪽x, 오른쪽x) 또는 None."""
+        white = cv2.inRange(hls, np.array([0, 180, 0]), np.array([180, 255, 80]))
+        dashes = self.longitudinal_white_mask(white)
+        height, width = dashes.shape
+        rows = np.flatnonzero(np.count_nonzero(dashes, axis=1) >= 2)
+        rows = rows[(rows >= height//10) & (rows < height*19//20)]
+        if len(rows) > 40:
+            rows = rows[np.linspace(0, len(rows)-1, 40, dtype=int)]
+        left_points, right_points = [], []
+        for y in rows:
+            if np.count_nonzero(white[y]) >= width*0.25:
+                continue
+            edges = np.diff(np.pad((dashes[y] > 0).astype(np.int8), (1, 1)))
+            centers = [(start+end-1)/2.0 for start, end in
+                       zip(np.flatnonzero(edges == 1), np.flatnonzero(edges == -1))
+                       if 2 <= end-start <= max(3, width*0.08)]
+            lefts = [c for c in centers if c < reference_x]
+            rights = [c for c in centers if c > reference_x]
+            if lefts:
+                left_points.append((max(lefts), int(y)))
+            if rights:
+                right_points.append((min(rights), int(y)))
+        left_fit, left_used = self.fit_boundary(left_points, width)
+        right_fit, right_used = self.fit_boundary(right_points, width)
+        if left_fit is None or right_fit is None:
+            return None
+        y = int(np.median([p[1] for p in left_used+right_used]))
+        left, right = float(np.polyval(left_fit, y)), float(np.polyval(right_fit, y))
+        expected = self.lane_width_at(y, width)
+        if not 0.6*expected <= right-left <= 1.5*expected:
+            return None
+        center_fit = (left_fit+right_fit)/2
+        heading = float(np.clip((np.polyval(center_fit, height*0.85) -
+                                 np.polyval(center_fit, height*0.25))/max(1.0, right-left), -1, 1))
+        center = float(np.clip(np.polyval(center_fit, y), 0, width-1))
+        return center, heading, y, left, right
+
     @staticmethod
     def fit_boundary(points, image_width):
         """Fit x(y), rejecting isolated row outliers without weighting paint width."""
@@ -279,6 +384,9 @@ class DetectLine(Node):
             self.lane_center = None
             self.lane_width = None
             self.width_profile = None
+            self.base_width_profile = None
+            self.flare_side = self.flare_trace = None
+            self.flare_until = 0.0
             self.left_trace = self.right_trace = None
             self.trace_received_at = None
             self.last_distance_to_ref = 0
@@ -299,9 +407,20 @@ class DetectLine(Node):
         nominal_ratio = float(np.clip(
             self.get_parameter('lane_width_ratio').value, 0.25, 0.98))
         nominal_width = self.lane_width if self.lane_width is not None else width*nominal_ratio
-        mode = self.controller_status.get('mode') if (
-            self.controller_received_at is not None and
-            now-self.controller_received_at < 0.5) else None
+        mode = self.current_mode(now)
+        guard = mode not in self.GUARD_EXEMPT_MODES
+        min_pair_ratio = float(np.clip(
+            self.get_parameter('min_pair_width_ratio').value, 0.0, 0.95))
+        double_gap = float(np.clip(
+            self.get_parameter('double_line_gap_ratio').value, 0.0, 0.9))
+
+        def min_pair_width(y):
+            limit = width*0.18
+            if guard and self.base_width_profile is not None:
+                base = float(np.clip(np.polyval(self.base_width_profile, y),
+                                     width*0.18, width*1.8))
+                limit = max(limit, base*min_pair_ratio)
+            return limit
 
         def expected_width(y):
             value = (np.polyval(self.width_profile, y) if self.width_profile is not None
@@ -332,9 +451,10 @@ class DetectLine(Node):
             if mode in ('branch_a', 'branch_b'):
                 predicted_center = reference_x+(-0.18 if mode == 'branch_a' else 0.18)*width
             candidates = []
+            narrowest = min_pair_width(y)
             for i, left in enumerate(centers):
                 for right in centers[i+1:]:
-                    if width*0.18 <= right-left <= width*0.98:
+                    if narrowest <= right-left <= width*0.98:
                         score = (abs((left+right)/2-predicted_center) +
                                  0.25*abs(right-left-expected_width(y)))
                         candidates.append((score, left, right))
@@ -342,11 +462,20 @@ class DetectLine(Node):
                 _, left, right = min(candidates)
                 paired.append((float(left), float(right), int(y)))
             observations = []
-            for x in centers:
-                for side, predicted in (('left', predicted_left), ('right', predicted_right)):
-                    error = abs(x-predicted)
-                    if error <= max(width*0.12, expected_width(y)*0.6):
-                        observations.append((error, side, x))
+            tolerance = max(width*0.12, expected_width(y)*0.6)
+            for side, predicted in (('left', predicted_left), ('right', predicted_right)):
+                near = [x for x in centers if abs(x-predicted) <= tolerance]
+                if not near:
+                    continue
+                x = min(near, key=lambda c: abs(c-predicted))
+                if guard and len(near) >= 2:
+                    # 이중선(옆 도로 선 + 내 차선 선)이면 차에 가까운 쪽이 내 경계.
+                    inner = max(near) if side == 'left' else min(near)
+                    inside = (inner < predicted_center if side == 'left'
+                              else inner > predicted_center)
+                    if inside and 0 < abs(inner-x) <= expected_width(y)*double_gap:
+                        x = inner
+                observations.append((abs(x-predicted), side, x))
             if observations:
                 _, side, x = min(observations)
                 singles[side].append((float(x), int(y)))
@@ -369,6 +498,13 @@ class DetectLine(Node):
                 self.width_profile = profile
             elif np.ptp([p[2] for p in valid_pairs]) >= max(20, height*0.2):
                 self.width_profile = 0.65*self.width_profile+0.35*profile
+            # 기준 1차선 폭: 3차선처럼 넓은 도로에서는 갱신하지 않는다.
+            if self.base_width_profile is None:
+                self.base_width_profile = profile
+            elif np.ptp([p[2] for p in valid_pairs]) >= max(20, height*0.2):
+                base = float(np.polyval(self.base_width_profile, y))
+                if base > 1 and 0.8 <= (right-left)/base <= 1.25:
+                    self.base_width_profile = 0.9*self.base_width_profile+0.1*profile
             self.left_trace, self.right_trace = left_fit, right_fit
             center_fit = (left_fit+right_fit)/2
             self.lane_width = right-left
@@ -397,6 +533,9 @@ class DetectLine(Node):
                 value = float(np.polyval(fit, y))
                 slope = 0.75*previous[0]+0.25*fit[0]
                 fit = np.array([slope, value-slope*y])
+            flare_note = ''
+            if guard and self.get_parameter('flare_reject_ratio').value > 0:
+                fit, flare_note = self.reject_flare(side, fit, points, width, height, now)
             profile = (self.width_profile if self.width_profile is not None else
                        np.array([0.0, nominal_width]))
             if side == 'left':
@@ -410,6 +549,7 @@ class DetectLine(Node):
                 center_fit = fit-profile/2
                 left, right = None, float(np.polyval(fit, y))
                 status = 'RIGHT ONLY - tracked curve centre'
+            status += flare_note
             self.lane_confidence = float(np.clip(span/(height*0.6)*0.6, 0.35, 0.65))
 
         self.trace_received_at = now
@@ -491,6 +631,16 @@ class DetectLine(Node):
         lane_state = self.road_state(hls, reference_x, cx, left_x, right_x, cy, x0, y0)
         if lane_state['valid'] and lane_state['lane_count'] == 3:
             cx = min(lane_state['centers'], key=lambda x: abs(x-reference_x))
+        elif (self.get_parameter('follow_white_dashes').value and
+                self.current_mode() not in self.GUARD_EXEMPT_MODES):
+            # 3차선 구간: 노란 바깥선 대신 좌우 흰 점선 사이를 따라간다.
+            dash = self.white_dash_lane(hls, reference_x)
+            if dash is not None:
+                cx, heading, cy, left_x, right_x = dash
+                lane_state.update(valid=True, lane_count=1, centers=[float(cx)],
+                                  heading_error=heading,
+                                  confidence=max(float(lane_state['confidence']), 0.65))
+                status += ' | WHITE DASH'
         detected = cx is not None
         if detected:
             distance_to_ref = int(round(reference_x - cx))
@@ -579,7 +729,7 @@ class DetectLine(Node):
             states = {'pending': 'WAIT', 'waiting': 'WAIT', 'active': 'RUN',
                       'completed': 'DONE', 'failed': 'FAIL'}
             results = course.get('mission_results', [])
-            for first in (0, 4):
+            for first in range(0, len(results), 4):
                 lines.append(' | '.join('%s.%s:%s' % (
                     row.get('stage'), row.get('mission'), states.get(row.get('state'), '?'))
                     for row in results[first:first+4]))

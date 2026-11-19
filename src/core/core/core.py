@@ -14,25 +14,29 @@ from geometry_msgs.msg import Twist
 from std_msgs.msg import Bool, String
 from dl_ros2_msgs.msg import BoundingBoxes
 
+from .behaviors.detect_stopline import DetectStopline
 from .behaviors.limo_control import LimoControl
 from .configuration import ros_args
-from .course import Course, DEFAULTS
+from .course import Course, DEFAULTS, STAGES
 from .detections import SignTracker
 from .missions.base import Observation
-from .lidar_lifecycle import LIDAR_MISSIONS
+from .lidar_lifecycle import requires_lidar
 
 
 class Core(Node):
-    def __init__(self, controller):
+    def __init__(self, controller, parking_node):
         super().__init__('core')
         self.controller = controller
+        self.parking_node = parking_node
+        self.parking_command = Twist()
+        self.last_parking_command = -math.inf
         defaults = dict(DEFAULTS, enabled=True, start_stage=1, stop_after_stage=False, input_timeout=0.5,
                         detection_timeout=1.0, sign_timeout=0.5, min_confidence=0.7,
-                        class_min_areas=[2900.0, 2700.0, 1800.0, 1800.0,
-                                         1800.0, 1800.0, 1800.0, 1800.0],
-                        confirm_frames=3, active_timeout=120.0)
+                        class_min_areas=[2900.0, 2700.0, 4400.0, 4400.0,
+                                         4100.0, 1800.0, 1800.0, 1800.0],
+                        confirm_frames=3)
         self.cfg = {k: self.declare_parameter(k, v).value for k, v in defaults.items()}
-        for key in ('input_timeout', 'detection_timeout', 'sign_timeout', 'active_timeout'):
+        for key in ('input_timeout', 'detection_timeout', 'sign_timeout'):
             if not math.isfinite(self.cfg[key]) or self.cfg[key] <= 0:
                 raise ValueError(f'{key} must be positive and finite')
         if (not 0 <= self.cfg['min_confidence'] <= 1 or self.cfg['confirm_frames'] < 1
@@ -40,27 +44,28 @@ class Core(Node):
                 or any(not math.isfinite(v) or v < 0 for v in self.cfg['class_min_areas'])
                 or not 1 <= self.cfg['start_stage'] <= 8):
             raise ValueError('Invalid class thresholds/start_stage')
-        for key in ('parking_speed', 'rear_axle_offset', 'wheelbase', 'max_steering_angle'):
-            self.cfg[key] = controller.cfg[key]
         self.cfg['end_stage'] = self.cfg['start_stage'] if self.cfg['stop_after_stage'] else 8
         self.course = Course(self.cfg)
-        self.course.index = self.cfg['start_stage']-1
+        self.course.index = STAGES.index(self.cfg['start_stage'])
+        self.cone_sign_areas = self.cfg['class_min_areas'].copy()
+        self.cone_sign_areas[5] = self.cfg['cone_slow_sign_min_area']
+        self.obstacle_sign_areas = self.cfg['class_min_areas'].copy()
+        self.obstacle_sign_areas[2:4] = [self.cfg['obstacle_direction_min_area']]*2
         self.tracker = SignTracker(self.cfg['min_confidence'], self.cfg['class_min_areas'],
                                    self.cfg['confirm_frames'], self.cfg['sign_timeout'])
         self.last_boxes = self.last_command = self.last_estop = -math.inf
         self.command = Twist()
+        self.stop_line_seen_at = None
         self.estop = True
         self.fault = ''
         self.reason = 'waiting_for_inputs'
-        self.mission_elapsed = 0.0
-        self.previous_tick = time.monotonic()
         self.last_blockers = None
         self.last_blocker_log = -math.inf
         self.lidar_actual = None
         self.lidar_state_received = -math.inf
         self.lidar_pending = True
         self.lidar_reason = 'waiting_for_scanner_controller'
-        controller.lidar_enabled = self.course.active.name in LIDAR_MISSIONS
+        controller.lidar_enabled = requires_lidar(self.course.active)
         self.lidar_request = self.create_publisher(Bool, '/core/lidar_enabled', 10)
         self.create_subscription(String, '/core/lidar_state', self.on_lidar_state, 10)
         self.publisher = self.create_publisher(Twist, '/cmd_vel', 10)
@@ -72,20 +77,30 @@ class Core(Node):
                                   ('mission_events_'+time.strftime('%Y%m%d_%H%M%S')+f'_{os.getpid()}.jsonl'))
         self.get_logger().info('Mission event log: '+self.event_log_path)
         self.create_subscription(Twist, '/core/control_cmd', self.on_command, 10)
+        self.create_subscription(Twist, 'mission/parking/cmd_vel', self.on_parking_command, 10)
         self.create_subscription(Bool, '/e_stop', self.on_estop, 10)
         self.create_subscription(BoundingBoxes, '/yolo_bounding_boxes', self.on_boxes,
                                  qos_profile_sensor_data)
         self.create_timer(0.05, self.tick)
 
+    def on_stop_line(self, detected):
+        self.stop_line_seen_at = time.monotonic() if detected else None
+
     def on_command(self, msg):
         self.command, self.last_command = msg, time.monotonic()
+
+    def on_parking_command(self, msg):
+        self.parking_command, self.last_parking_command = msg, time.monotonic()
 
     def on_estop(self, msg):
         self.estop, self.last_estop = msg.data, time.monotonic()
 
     def on_boxes(self, msg):
         now = time.monotonic()
-        self.tracker.update(msg.bounding_boxes, now)
+        areas_by_mission = {'obstacle': self.obstacle_sign_areas,
+                            'cone': self.cone_sign_areas}
+        areas = areas_by_mission.get(self.course.active.name)
+        self.tracker.update(msg.bounding_boxes, now, areas)
         self.last_boxes = now
 
     def on_lidar_state(self, msg):
@@ -101,7 +116,7 @@ class Core(Node):
             self.lidar_actual = None
 
     def update_lidar_request(self):
-        wanted = (self.course.active.name in LIDAR_MISSIONS and not self.course.finished
+        wanted = (requires_lidar(self.course.active) and not self.course.finished
                   and not self.fault and self.get_parameter('enabled').value)
         if wanted != self.controller.lidar_enabled:
             self.controller.lidar_enabled = wanted
@@ -146,14 +161,20 @@ class Core(Node):
     def report_mission_events(self):
         labels = {'waiting': '대기', 'active': '진행', 'completed': '완료 판정', 'failed': '실패/정지'}
         reasons = {
-            'bump_passed_by_odometry': '서행 표지판 사라짐 + 설정 거리/시간 충족',
+            'slow_duration_completed': '방지턱 서행 설정 시간 완료',
             'guide_distance_completed': '서행 유도선 설정 거리 통과',
-            'pedestrian_stop_and_wait_completed': '보행자 정지·3초 대기 후 차선 추종 20초 완료',
+            'guide_stop_line_detected': '서행 구간 시작 정지선 확인',
+            'pedestrian_stop_and_wait_completed': '보행자 정지 및 대기 완료',
+            'waiting_for_stop_line': '차선 추종 중 정지선 대기',
+            'obstacle_stage_entered': '3차선 장애물 회피 시작',
             'direction_sign_obstacle_exit': '갈림길 표지판 확인·장애물 미션 종료·방향 전달',
-            'branch_turn_and_lane_reacquired': '갈림길 후 차선 추종 20초 연속 이동·대형 라바콘 5개 확인',
-            'cone_exit_and_lane_confirmed': '고정 조향 완료·정지 후 차선 획득 1초 확인',
+            'branch_cones_confirmed': '갈림길 조향 완료 후 같은 영상에서 대형 라바콘 확인',
+            'cone_exit_stop_completed': '라바콘 통로 종료 후 정지 대기 완료',
+            'cone_slow_sign_confirmed': '서행 표지판 확인·라바콘 미션 종료',
+            'cone_slow_started': '라바콘 통과 후 서행 시작',
+            'cone_slow_traffic_light_confirmed': '신호등 확인·서행 종료·신호 전달',
             'green_pixel_threshold_departure': '초록불 면적 기준 충족/차선 추종 복귀',
-            't_parking_completed': '주차 경로/영역/자세/정지 조건 충족',
+            't_parking_completed': '전면 T주차 노드 완료·정지 명령',
         }
         for event in getattr(self.course, 'events', []):
             if event['sequence'] <= self.event_sequence:
@@ -161,7 +182,7 @@ class Core(Node):
             payload = dict(event, timestamp=time.strftime('%Y-%m-%d %H:%M:%S'))
             text = json.dumps(payload, ensure_ascii=False)
             self.mission_events.publish(String(data=text))
-            message = '[미션 %d/8 %s] %s | %s | %.2fm / %.1fs' % (
+            message = '[미션 %s/8 %s] %s | %s | %.2fm / %.1fs' % (
                 event['stage'], event['title'], labels[event['state']],
                 reasons.get(event['reason'], event['reason']), event['distance_m'], event['elapsed_sec'])
             if event['state'] == 'failed':
@@ -179,10 +200,11 @@ class Core(Node):
 
     def tick(self):
         now = time.monotonic()
-        dt = min(0.2, max(0.0, now-self.previous_tick))
-        self.previous_tick = now
         control = self.controller
         lidar_enabled = self.update_lidar_request()
+        active = self.course.active
+        parking_active = active.name == 'parking' and active.phase == 'parking'
+        parking = self.parking_node.logic if parking_active else None
         blockers = []
         if not self.get_parameter('enabled').value:
             blockers.append('core_disabled')
@@ -198,7 +220,11 @@ class Core(Node):
             blockers.append('no_estop_heartbeat')
         if now-self.last_boxes > self.cfg['detection_timeout']:
             blockers.append('no_yolo_detections_heartbeat')
-        sensors = ('lane', 'odom', 'vehicle') + (('obstacles', 'e_stop') if lidar_enabled else ())
+        sensors = ('odom', 'vehicle')
+        if not parking_active:
+            sensors += ('lane',)
+        if lidar_enabled:
+            sensors += ('obstacles', 'e_stop')
         for key in sensors:
             if not control.fresh(key, now):
                 blockers.append(key+'_stale_or_missing')
@@ -214,6 +240,8 @@ class Core(Node):
             blockers.append('odometry_fault')
         if control.vehicle_control_mode != control.cfg['command_control_mode']:
             blockers.append('waiting_for_command_mode(%s)' % control.vehicle_control_mode)
+        if parking_active and control.vehicle_motion_mode != 1:
+            blockers.append('parking_ackermann_mode_required')
         healthy = not blockers
         if blockers != self.last_blockers and now-self.last_blocker_log >= 2:
             if blockers:
@@ -224,45 +252,69 @@ class Core(Node):
         if control.mode == 'hold' and control.hold_reason not in ('', 'initial_hold', 'operator_hold'):
             self.fail(control.hold_reason)
             healthy = False
+        if not healthy and self.course.active.name == 'pedestrian' and self.course.active.phase == 'restarting':
+            self.course.active.restart_at = None
         if healthy and not self.course.finished:
+            if parking is not None and parking.state == 'WAIT':
+                parking_now = self.parking_node._now()
+                if (parking.pose_t is not None and parking.scan_t is not None
+                        and parking_now-parking.pose_t <= parking.cfg.odom_timeout_sec
+                        and parking_now-parking.scan_t <= parking.cfg.scan_timeout_sec):
+                    self.last_parking_command = -math.inf
+                    self.parking_node._start_cb(Bool(data=True))
+            stop_line_seen_at = self.stop_line_seen_at
+            if (stop_line_seen_at is not None and
+                    now-stop_line_seen_at > self.cfg['input_timeout']):
+                stop_line_seen_at = None
             obs = Observation(now, control.travel, self.tracker.signs(now), control.lane,
                               tuple(control.obstacles.get('points', [])) if lidar_enabled else (), control.mode,
                               control.phase, control.odom_speed, control.reason,
-                              large_cone_count=getattr(self.tracker, 'large_cone_count', 0))
+                              large_cone_count=(self.tracker.large_cone_count
+                                                if now-self.last_boxes <= self.cfg['sign_timeout']
+                                                else 0),
+                              parking_state=parking.state if parking else 'WAIT',
+                              parking_reason=parking.reason if parking else '',
+                              stop_line_seen_at=stop_line_seen_at)
             epoch = self.course.epoch
             result = self.course.tick(obs)
             self.reason = result.reason
-            self.mission_elapsed += dt
             if result.fault:
                 self.fail(result.fault)
-            elif self.mission_elapsed > self.cfg['active_timeout']:
-                self.fail('mission_timeout: '+self.course.active.name)
             else:
                 self.dispatch(result.command)
             if self.course.epoch != epoch:
-                self.mission_elapsed = 0.0
                 self.tracker.reset()
-                self.get_logger().info(f'Mission {self.course.index+1}: {self.course.active.name}')
+                self.get_logger().info(f'Mission {STAGES[self.course.index]}: {self.course.active.name}')
             # Switch motor demand before any command can escape into the next mission.
             after = self.update_lidar_request()
             if after != lidar_enabled or self.course.finished:
                 healthy = False
         Core.report_mission_events(self)
         output = Twist()
-        if (healthy and not self.fault and not self.course.finished and control.mode != 'hold'
-                and now-self.last_command <= self.cfg['input_timeout']
-                and all(math.isfinite(v) for v in (self.command.linear.x, self.command.angular.z))):
-            output = self.command
+        cone_ready = (control.mode != 'cones' or
+                      (control.phase == 'cone_tracking' and
+                       now-control.cone_scan_time <= 0.3))
+        if healthy and not self.fault and not self.course.finished:
+            if parking is not None:
+                candidate = self.parking_command
+                if (parking.state in ('APPROACH', 'SEARCH', 'TURN', 'ENTER')
+                        and now-self.last_parking_command <= self.cfg['input_timeout']
+                        and all(math.isfinite(v) for v in (candidate.linear.x, candidate.angular.z))):
+                    output = candidate
+            elif (cone_ready and control.mode != 'hold' and now-self.last_command <= self.cfg['input_timeout']
+                  and all(math.isfinite(v) for v in (self.command.linear.x, self.command.angular.z))):
+                output = self.command
         self.publisher.publish(output)
-        if hasattr(control, 'record_cone_output'):
-            control.record_cone_output(now, output)
+        if control.phase == 'branch_fixed_steering':
+            control.record_fixed_branch_output(now, output)
         progress = self.course.progress(Observation(now, control.travel)) if hasattr(self.course, 'progress') else {}
         self.status.publish(String(data=json.dumps(dict(
-            stage=self.course.index+1, mission=self.course.active.name,
+            stage=STAGES[self.course.index], mission=self.course.active.name,
             phase=self.course.active.phase, finished=self.course.finished,
             ready=healthy, fault=self.fault, reason=self.reason,
-            controller_mode=control.mode, controller_phase=control.phase,
-            controller_reason=control.reason, blockers=blockers,
+            controller_mode='parking' if parking else control.mode,
+            controller_phase=parking.state.lower() if parking else control.phase,
+            controller_reason=parking.reason if parking else control.reason, blockers=blockers,
             vehicle_motion_mode=getattr(control, 'vehicle_motion_mode', None),
             vehicle_control_mode=control.vehicle_control_mode,
             lidar_required=control.lidar_enabled, lidar_scanning=self.lidar_actual,
@@ -279,16 +331,27 @@ class Core(Node):
 
 
 def main(args=None):
+    from jetracer_ros2.mission_parking_node import MissionParkingNode
+
     rclpy.init(args=ros_args(args))
     executor = SingleThreadedExecutor()
     nodes = []
     try:
         controller = LimoControl(
+            use_team_lane=True,
             cli_args=['--ros-args', '-r', 'cmd_vel:=/core/control_cmd'],
             parameter_overrides=[Parameter('auto_slow_sign', value=False),
                                  Parameter('auto_obstacle_mode', value=False)])
         nodes.append(controller)
-        nodes.append(Core(controller))
+        parking = MissionParkingNode()
+        nodes.append(parking)
+        core = Core(controller, parking)
+        nodes.append(core)
+        nodes.append(DetectStopline(
+            on_detection=core.on_stop_line,
+            enabled=lambda: (core.course.waiting_for_stop_line
+                             and not core.course.fault and not core.fault),
+        ))
         for node in nodes:
             executor.add_node(node)
         executor.spin()

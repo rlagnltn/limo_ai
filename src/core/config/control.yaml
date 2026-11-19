@@ -1,6 +1,6 @@
 limo_control:
   ros__parameters:
-    default_speed: 0.8
+    default_speed: 0.6
     max_speed: 0.8
     slow_speed: 0.2
     uncertain_speed: 0.2
@@ -12,7 +12,7 @@ limo_control:
     rear_axle_offset: 0.1
     robot_front: 0.18
     robot_rear: 0.18
-    robot_width: 0.22
+    robot_width: 0.20
     safety_margin: 0.04
     geometry_verified: false
     auto_slow_sign: false
@@ -26,4 +26,4 @@ limo_control:
     sensor_timeout: 0.5
     stop_line_margin: 0.1
     mission_timeout: 15.0
-    lap_timeout: 600.0
+    lap_timeout: 0.0  # Disable the overall run time limit.

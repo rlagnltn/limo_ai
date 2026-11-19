@@ -1,16 +1,19 @@
 from pathlib import Path
 import sys
 import unittest
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
-from core.lidar_lifecycle import LIDAR_MISSIONS, ScanLease
+from core.lidar_lifecycle import LIDAR_MISSIONS, ScanLease, requires_lidar
 
 
 class ScanLifecycleTests(unittest.TestCase):
-    def test_only_obstacle_uses_lidar(self):
-        self.assertEqual(LIDAR_MISSIONS, {'obstacle'})
-        for name in ('slow', 'guide', 'pedestrian', 'intersection', 'cone', 'traffic', 'parking'):
+    def test_obstacle_and_cone_use_lidar(self):
+        self.assertEqual(LIDAR_MISSIONS, {'obstacle', 'cone'})
+        for name in ('slow', 'guide', 'pedestrian', 'intersection', 'traffic', 'parking'):
             self.assertNotIn(name, LIDAR_MISSIONS)
+        self.assertFalse(requires_lidar(SimpleNamespace(name='parking', phase='waiting')))
+        self.assertTrue(requires_lidar(SimpleNamespace(name='parking', phase='parking')))
 
     def test_startup_stops_motor_and_does_not_repeat_commands(self):
         lease = ScanLease()

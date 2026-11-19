@@ -1,6 +1,12 @@
 """Start/stop the scanner only while the selected course missions request it."""
 
-LIDAR_MISSIONS = frozenset({'obstacle'})
+LIDAR_MISSIONS = frozenset({'obstacle', 'cone'})
+
+
+def requires_lidar(mission):
+    if mission.name == 'obstacle' and mission.phase == 'waiting_for_stop_line':
+        return False
+    return mission.name in LIDAR_MISSIONS or (mission.name == 'parking' and mission.phase == 'parking')
 
 
 class ScanLease:

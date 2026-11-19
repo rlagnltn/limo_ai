@@ -10,7 +10,7 @@ def generate_launch_description():
     yolo_args = [item for path in configs for item in ('--params-file', path)]
     return LaunchDescription([
         DeclareLaunchArgument('yolo_python', default_value='/home/wego/miniconda3/envs/dl_env/bin/python3'),
-        DeclareLaunchArgument('weight', default_value='/home/wego/wego_ws/src/dl_ros2_application/weight/testv2.engine'),
+        DeclareLaunchArgument('weight', default_value='/home/wego/wego_ws/src/dl_ros2_application/weight/testv5.engine'),
         Node(package='core', executable='perception', output='screen',
              remappings=[('cmd_vel', '/core/emergency_cmd')]),
         ExecuteProcess(cmd=[LaunchConfiguration('yolo_python'), '-u', '-c',

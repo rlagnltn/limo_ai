@@ -1,7 +1,7 @@
 from .base import Mission, Result
 
 
-DEFAULTS = {}
+DEFAULTS = {'obstacle_direction_min_area': 4300.0}
 
 
 class ObstacleMission(Mission):

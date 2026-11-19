@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""YOLO11 testv2 클래스 0/1의 박스 면적으로 동작하는 ROS 2 제어 노드.
+"""YOLO11 testv5 클래스 0/1의 박스 면적으로 동작하는 ROS 2 제어 노드.
 
-먼저 yolo_object_detect를 testv2.engine으로 실행해야 한다.
+먼저 yolo_object_detect를 testv5.engine으로 실행해야 한다.
 크기는 원본 영상 좌표 기준 (xmax-xmin)*(ymax-ymin), 단위 pixel^2.
 파라미터는 실행 시 --ros-args -p red_min_area:=3000.0 등으로 지정한다.
 이 노드가 제어하는 동안 다른 /cmd_vel 발행 노드는 중지해야 한다.

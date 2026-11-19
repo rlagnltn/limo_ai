@@ -1,7 +1,7 @@
 from .base import Mission, Result
 
 
-DEFAULTS = dict(branch_exit_confirm=20.0, branch_cone_count=5)
+DEFAULTS = dict(branch_cone_count=1)
 
 
 class IntersectionMission(Mission):
@@ -21,10 +21,7 @@ class IntersectionMission(Mission):
                               reason='left_sign_2' if left else 'right_sign_3')
             if obs.mode == 'hold':
                 return Result({'mode': 'follow'}, reason='waiting_direction_sign')
-        elif self.phase == 'turning':
-            following = (obs.mode == 'follow' and obs.lane.get('valid') is True
-                         and obs.speed > 0.005)
-            timed = self.stable_clear(following, obs.now, self.cfg['branch_exit_confirm'])
-            if timed and obs.large_cone_count >= self.cfg['branch_cone_count']:
-                return Result(done=True, reason='branch_turn_and_lane_reacquired')
+        elif (self.phase == 'turning' and obs.mode == 'follow'
+              and obs.large_cone_count >= self.cfg['branch_cone_count']):
+            return Result(done=True, reason='branch_cones_confirmed')
         return Result(reason=self.phase)

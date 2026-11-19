@@ -1,4 +1,4 @@
 core:
   ros__parameters:
-    # Class 0 >=2900 px² stops immediately; class 1 >=2700 px² releases.
+    # Red and green minimum areas are configured in course.yaml.
     traffic_stopped_speed: 0.005

@@ -2,9 +2,8 @@ import rclpy
 from rclpy.node import Node 
 
 import cv2
-import numpy as np
 from cv_bridge import CvBridge
-from limo_ros2_application.yolov8_det_vid import YoLov8TRT
+from ultralytics import YOLO
 
 from sensor_msgs.msg import Image
 
@@ -16,12 +15,10 @@ class DetectObject(Node):
         # set node name
         super().__init__('detect_object')
 
-        #set file path
-        engine_file_path = '/home/wego/third_party_library/AI/yolov8_trt_ros2/build/yolov8n.engine'
-        library_file_path = '/home/wego/third_party_library/AI/yolov8_trt_ros2/build/libmyplugins.so'
-
-        # set the model for Yolov8
-        self.model = YoLov8TRT(library_file_path, engine_file_path)
+        self.declare_parameter('model_weight_path',
+                               '/home/wego/wego_ws/src/dl_ros2_application/weight/testv5.engine')
+        model_path = self.get_parameter('model_weight_path').value
+        self.model = YOLO(model_path, task='detect')
 
         # Subscribe camera data
         self.subscription = self.create_subscription(
@@ -37,17 +34,17 @@ class DetectObject(Node):
 
     def image_callback(self, msg):
         # convert opencv Mat type to image msg type
-        image = np.empty(shape=[1])
         image_ = self.br.imgmsg_to_cv2(msg, 'bgr8')
         
-        # get data and save
-        result_boxes, result_scores, result_classid = self.model.Inference(image_)
+        result = self.model(image_, verbose=False)[0]
+        if result.boxes is not None:
+            boxes = result.boxes.xyxy.cpu().tolist()
+            scores = result.boxes.conf.cpu().tolist()
+            classes = result.boxes.cls.cpu().tolist()
+            for box, score, class_id in zip(boxes, scores, classes):
+                label = f"{result.names[int(class_id)]}:{score:.2f}"
+                self.plot_one_box(box, image_, label=label)
 
-        # plot all object
-        for i in range(len(result_boxes)):
-            box = result_boxes[i]
-            self.plot_one_box(box, image_, label="{}:{:.2f}".format(self.model.categories[int(result_classid[i])], result_scores[i]),)
-        
         # publish image
         self.yolo_publisher.publish(self.br.cv2_to_imgmsg(image_,'bgr8'))
     

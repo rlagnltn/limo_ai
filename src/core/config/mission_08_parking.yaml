@@ -1,12 +1,21 @@
-core:
+mission_parking_node:
+  # M4 전면 T주차 (parking_logic.py). 여기 없는 값은 ParkingConfig 기본값.
+  # 실차에서 먼저 맞출 것: turn_radius_m(실제 최소 회전반경), line_to_grid_m / start_to_grid_m(트랙 실측),
+  # target_x_offset_m(최종 좌우 치우침), park_rear_y_m(깊이). mission/parking/debug 로 확인.
   ros__parameters:
-    # Coordinates relative to the vehicle when class 6 is confirmed, metres/radians.
-    parking_side: right
-    parking_approach: 0.6
-    parking_radius: 0.6
-    parking_reverse: 0.3
-    parking_sample: 0.08
-    parking_box: [-0.35, 0.25, -1.35, -0.45]
+    output_topic: 'mission/parking/cmd_vel'
+    lane_command_topic: 'inference/cmd_vel'
+    turn_radius_m: 0.50
+    line_to_grid_m: 0.47
+    start_to_grid_m: 2.30
+    target_x_offset_m: -0.02
+    park_rear_y_m: 0.22
+    v_approach: 0.18
+    v_search: 0.12
+    v_turn: 0.10
+    v_enter: 0.08
+    max_time_sec: 0.0
+
 limo_control:
   ros__parameters:
     parking_speed: 0.05

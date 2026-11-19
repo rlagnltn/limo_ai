@@ -5,8 +5,8 @@ obstacles/branch_a/branch_b/cones/pedestrian/traffic/parking/hold.
 YOLO slow_sign (class 5) starts the timed speed-bump mission.
 Other signs and signals use mission_command. {"signal":"green"} releases a traffic stop.
 Parking requires a measured path and parking_box in the entry robot frame.
-Geometry/calibration gates must be verified on the real robot before enabling
-metric manoeuvres. Never use elapsed time alone as a parking/stop distance.
+Parking and LiDAR lane changes require verified geometry.
+Never use elapsed time alone as a parking/stop distance.
 """
 import json
 import math
@@ -19,13 +19,20 @@ from rclpy.qos import qos_profile_sensor_data
 from dl_ros2_msgs.msg import BoundingBoxes
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
-from sensor_msgs.msg import Imu
+from sensor_msgs.msg import Imu, LaserScan
 from std_msgs.msg import Bool, Int32, String
 from limo_msgs.msg import LimoStatus
 if __package__:
+    from .cone_follow import ConeFollower, ModeMachine, Params, Plan, scan_points
     from .limo_e_stop import clamp, wrap_angle, yaw_of
 else:
+    from cone_follow import ConeFollower, ModeMachine, Params, Plan, scan_points
     from limo_e_stop import clamp, wrap_angle, yaw_of
+
+
+BRANCH_FIXED_SPEED = 0.3
+BRANCH_FIXED_SECONDS = 3.0
+BRANCH_FIXED_STEERING = math.radians(15.0)
 
 
 def finite_number(value):
@@ -46,13 +53,13 @@ def world_point(pose, x, y):
 
 
 class LimoControl(Node):
-    def __init__(self, **kwargs):
+    def __init__(self, *, use_team_lane=False, **kwargs):
         super().__init__('limo_control', **kwargs)
         defaults = dict(enabled=True, default_speed=0.8, max_speed=0.8,
                         slow_speed=0.2, uncertain_speed=0.2, parking_speed=0.08,
                         p_gain=0.003, d_gain=0.0002, heading_gain=0.25,
                         wheelbase=0.2, max_steering_angle=0.35,
-                        robot_front=0.18, robot_rear=0.18, robot_width=0.22,
+                        robot_front=0.18, robot_rear=0.18, robot_width=0.20,
                         rear_axle_offset=0.1, safety_margin=0.04,
                         acceleration=0.25, deceleration=0.4, reaction_time=0.25,
                         curvature_rate=2.0, sensor_timeout=0.5, vehicle_status_timeout=2.5,
@@ -62,37 +69,29 @@ class LimoControl(Node):
                         guide_distance=1.677, stop_tolerance=0.02,
                         stop_search_distance=1.5, stopped_speed=0.005,
                         stop_confirm_time=0.2,
-                        pedestrian_wait=3.2, mission_timeout=15.0, lap_timeout=600.0,
+                        pedestrian_wait=4.0, mission_timeout=15.0, lap_timeout=600.0,
                         geometry_verified=False, auto_obstacle_mode=True,
                         require_path_coverage_for_lane_follow=True,
                         allow_sparse_scan_crawl=False, sparse_scan_speed=0.05,
                         command_control_mode=1, command_mode_settle=0.2,
                         require_ackermann=False, base_frame='base_link',
                         odom_frame='odom', initial_mode='follow', auto_slow_sign=True,
-                        branch_approach=0.2, branch_angle=0.7, branch_curvature=1.5,
-                        branch_speed=0.08, branch_exit_distance=0.3,
-                        branch_yaw_tolerance=0.08, parking_lookahead=0.2,
-                        cone_right_degrees=10.0, cone_left_degrees=15.0,
-                        cone_right_seconds=2.0, cone_left_seconds=2.0, cone_speed=0.3,
+                        parking_lookahead=0.2,
                         stop_line_margin=0.1)
         self.cfg = {k: self.declare_parameter(k, v).value for k, v in defaults.items()}
         for k in ('default_speed', 'max_speed', 'slow_speed', 'uncertain_speed',
                   'parking_speed', 'wheelbase', 'max_steering_angle', 'robot_front',
                   'robot_rear', 'robot_width', 'acceleration', 'deceleration',
-                  'sensor_timeout', 'vehicle_status_timeout', 'lookahead', 'avoidance_horizon', 'lap_timeout',
+                  'sensor_timeout', 'vehicle_status_timeout', 'lookahead', 'avoidance_horizon',
                   'curvature_rate', 'lane_change_distance', 'guide_distance',
                   'stop_tolerance', 'stop_search_distance', 'stopped_speed',
                   'stop_confirm_time', 'reaction_time'):
             if not math.isfinite(self.cfg[k]) or self.cfg[k] <= 0:
                 raise ValueError('Invalid control parameter: '+k)
+        if not math.isfinite(self.cfg['lap_timeout']) or self.cfg['lap_timeout'] < 0:
+            raise ValueError('Invalid control parameter: lap_timeout')
         if not 0 < self.cfg['max_steering_angle'] < 0.5:
             raise ValueError('Steering limit must respect the Ackermann mechanism')
-        if (not 0 < self.cfg['cone_speed'] <= self.cfg['max_speed'] or
-                any(not math.isfinite(self.cfg[k]) or not 0 < self.cfg[k] <= 10
-                    for k in ('cone_right_seconds', 'cone_left_seconds')) or
-                any(not math.isfinite(self.cfg[k]) or not 0 < math.radians(self.cfg[k]) <= self.cfg['max_steering_angle']
-                    for k in ('cone_right_degrees', 'cone_left_degrees'))):
-            raise ValueError('Invalid forced cone speed/duration/steering angle')
         if (not 0 < self.cfg['p_gain'] <= 0.02 or self.cfg['d_gain'] < 0 or
                 self.cfg['heading_gain'] < 0):
             raise ValueError('Invalid steering gains')
@@ -111,13 +110,6 @@ class LimoControl(Node):
         if (not 0 < self.cfg['parking_lookahead'] <= 1.0 or
                 not 0 <= self.cfg['stop_line_margin'] <= 1.0):
             raise ValueError('Invalid parking lookahead/stop margin')
-        if (not 0 < self.cfg['branch_angle'] < math.pi or
-                not 0 < self.cfg['branch_curvature'] <= math.tan(self.cfg['max_steering_angle'])/self.cfg['wheelbase'] or
-                not 0 < self.cfg['branch_speed'] <= self.cfg['max_speed'] or
-                not 0 <= self.cfg['branch_approach'] <= 3 or
-                not 0 < self.cfg['branch_exit_distance'] <= 3 or
-                not 0 < self.cfg['branch_yaw_tolerance'] < self.cfg['branch_angle']):
-            raise ValueError('Invalid intersection geometry')
         if (type(self.cfg['command_control_mode']) is not int or
                 not 0 <= self.cfg['command_control_mode'] <= 255 or
                 not 0 <= self.cfg['command_mode_settle'] <= 1.0):
@@ -132,6 +124,7 @@ class LimoControl(Node):
             self.create_subscription(String, 'mission_command', self.command_callback, 10),
             self.create_subscription(BoundingBoxes, '/yolo_bounding_boxes', self.yolo_callback, 10),
             self.create_subscription(Odometry, 'odom', self.odom_callback, qos_profile_sensor_data),
+            self.create_subscription(LaserScan, '/scan', self.cone_scan_callback, qos_profile_sensor_data),
             self.create_subscription(Imu, 'imu', self.imu_callback, qos_profile_sensor_data),
             self.create_subscription(LimoStatus, 'limo_status', self.vehicle_callback, 10),
             # Compatibility only: distance_y alone never authorizes motion.
@@ -140,6 +133,10 @@ class LimoControl(Node):
         self.lane = {}
         self.obstacles = {}
         self.received = {}
+        self.use_team_lane = use_team_lane
+        self.team_lane_command = Twist()
+        if use_team_lane:
+            self.create_subscription(Twist, '/core/lane_cmd', self.team_lane_callback, 1)
         self.e_stop_flag = True
         self.pose = None
         self.odom_speed = 0.0
@@ -191,10 +188,6 @@ class LimoControl(Node):
             self.hold_reason = ''
         self.mode, self.phase = mode, 'running'
         self.immediate_stop = False
-        self.cone_segment_elapsed = 0.0
-        self.cone_output_time = None
-        self.cone_output_phase = None
-        self.cone_output_active = False
         self.entered_at, self.phase_travel = now, self.travel
         self.phase_heading = self.pose[2] if self.pose else 0.0
         self.blocked_since = None
@@ -209,9 +202,15 @@ class LimoControl(Node):
             self.phase = 'approach_stop'
             self.signal = ('red', now)
         elif mode in ('branch_a', 'branch_b'):
-            self.phase = 'approach'
+            self.phase = 'branch_fixed_steering'
+            self.branch_fixed_elapsed = 0.0
+            self.branch_fixed_output_at = None
         elif mode == 'cones':
-            self.phase = 'cone_right'
+            self.phase = 'cone_waiting_for_rows'
+            self.cone_follower = ConeFollower(Params())
+            self.cone_mode = ModeMachine(self.cone_follower.p)
+            self.cone_plan = Plan(reason='waiting_for_scan')
+            self.cone_scan_time = -math.inf
         elif mode == 'hold':
             self.phase = 'stopped'
 
@@ -445,6 +444,13 @@ class LimoControl(Node):
         timeout = self.cfg['vehicle_status_timeout'] if name == 'vehicle' else self.cfg['sensor_timeout']
         return name in self.received and 0 <= now-self.received[name] <= timeout
 
+    def team_lane_callback(self, msg):
+        if all(math.isfinite(value) for value in (msg.linear.x, msg.angular.z)):
+            self.team_lane_command = msg
+            self.received['team_lane'] = time.monotonic()
+        else:
+            self.received.pop('team_lane', None)
+
     def steering_curvature(self, now, dt):
         width = float(self.lane['width'])
         error = float(self.lane['offset'])*640.0/width
@@ -554,46 +560,52 @@ class LimoControl(Node):
             self.target_lane = None
         return curvature, 'tracking_lane_%d' % selected
 
-    def record_cone_output(self, now, command):
-        """Count issued motion time at the final core output, never blocked wall time."""
-        phase = self.phase
-        previous = self.cone_output_time
-        if (self.mode == 'cones' and self.cone_output_active
-                and self.cone_output_phase == phase and previous is not None
-                and 0 <= now-previous <= 0.2):
-            self.cone_segment_elapsed += now-previous
-        active = (self.mode == 'cones' and phase in ('cone_right', 'cone_left')
-                  and getattr(self, 'vehicle_motion_mode', None) == 1)
-        if active and command.linear.x > 0.005:
-            degrees = (-self.cfg['cone_right_degrees'] if phase == 'cone_right'
-                       else self.cfg['cone_left_degrees'])
-            expected = math.tan(math.radians(degrees))/self.cfg['wheelbase']
-            active = abs(command.angular.z/command.linear.x-expected) < 1e-6
-        else:
-            active = False
-        self.cone_output_time = now
-        self.cone_output_phase = phase
-        self.cone_output_active = active
+    def fixed_branch_curvature(self):
+        sign = 1 if self.mode == 'branch_a' else -1
+        return sign*math.tan(BRANCH_FIXED_STEERING)/self.cfg['wheelbase']
 
-    def forced_cone_control(self):
-        # These are wheel steering commands; yaw is derived through Ackermann geometry.
-        if getattr(self, 'vehicle_motion_mode', None) != 1:
-            return 0.0, 0.0, 'cone_ackermann_mode_required'
-        if self.phase == 'cone_right' and self.cone_segment_elapsed+1e-9 >= self.cfg['cone_right_seconds']:
-            self.phase = 'cone_left'
-            self.cone_segment_elapsed = 0.0
-            self.cone_output_active = False
-        if self.phase == 'cone_left' and self.cone_segment_elapsed+1e-9 >= self.cfg['cone_left_seconds']:
+    def record_fixed_branch_output(self, now, command):
+        curvature = self.fixed_branch_curvature()
+        if (math.isclose(command.linear.x, BRANCH_FIXED_SPEED) and
+                math.isclose(command.angular.z, BRANCH_FIXED_SPEED*curvature)):
+            previous = self.branch_fixed_output_at
+            if previous is not None and 0.0 <= now-previous <= 0.2:
+                self.branch_fixed_elapsed += now-previous
+            self.branch_fixed_output_at = now
+        else:
+            self.branch_fixed_output_at = None
+
+    def cone_scan_callback(self, msg):
+        if self.mode != 'cones' or self.phase == 'cone_acquire':
+            return
+        now = time.monotonic()
+        stamp = msg.header.stamp
+        age = (self.get_clock().now().nanoseconds - stamp.sec * 10**9 - stamp.nanosec) / 10**9
+        if not (-0.1 <= age <= 0.3) or not msg.ranges:
+            self.cone_scan_time = -math.inf
+            return
+        if now - self.cone_scan_time > 0.3:
+            self.cone_mode.enter_n = self.cone_mode.exit_n = 0
+        params = self.cone_follower.p
+        points, _ = scan_points(msg.angle_min, msg.angle_increment, msg.ranges, params, msg.range_max)
+        self.cone_plan = self.cone_follower.update(points, now)
+        self.cone_scan_time = now
+        mode = self.cone_mode.step(self.cone_plan)
+        if mode == 'CONE':
+            self.phase = 'cone_tracking'
+        elif mode == 'DONE':
             self.phase = 'cone_acquire'
-            self.cone_output_active = False
+
+    def cone_control(self, now):
+        if self.vehicle_motion_mode != 1:
+            return 0.0, 0.0, 'cone_ackermann_mode_required'
         if self.phase == 'cone_acquire':
             return 0.0, 0.0, 'cone_stopped_acquiring_lane'
-        if self.phase not in ('cone_right', 'cone_left'):
-            return 0.0, 0.0, 'cone_invalid_phase'
-        degrees = (-self.cfg['cone_right_degrees'] if self.phase == 'cone_right'
-                   else self.cfg['cone_left_degrees'])
-        curvature = math.tan(math.radians(degrees))/self.cfg['wheelbase']
-        return self.cfg['cone_speed'], curvature, self.phase
+        if now - self.cone_scan_time > 0.3:
+            return 0.0, 0.0, 'cone_scan_missing_or_stale'
+        if self.cone_mode.mode != 'CONE':
+            return 0.0, 0.0, 'cone_waiting_for_rows'
+        return self.cone_plan.v, self.cone_plan.k, 'cone_' + self.cone_plan.reason
 
     def parking_control(self):
         if self.parking_origin is None or not self.parking_path:
@@ -672,7 +684,8 @@ class LimoControl(Node):
                 return 0.0, 0.0, sensor+'_stale_or_missing'
         if (lidar_enabled and self.e_stop_flag) or not self.vehicle_ok or self.odom_fault:
             return 0.0, 0.0, 'emergency_stop_or_vehicle_fault'
-        if self.started_at is not None and now-self.started_at >= self.cfg['lap_timeout']:
+        lap_timeout = self.cfg['lap_timeout']
+        if lap_timeout > 0 and self.started_at is not None and now-self.started_at >= lap_timeout:
             self.enter_hold('lap_time_limit', now)
             return 0.0, 0.0, 'lap_time_limit'
         travelled = self.travel-self.phase_travel
@@ -702,7 +715,7 @@ class LimoControl(Node):
                 if self.stopped_at is None:
                     return 0.0, 0.0, 'stop_not_confirmed'
                 waiting = now-self.stopped_at
-                if waiting >= self.cfg['mission_timeout']:
+                if self.mode == 'traffic' and waiting >= self.cfg['mission_timeout']:
                     self.phase = 'failed'
                     return 0.0, 0.0, 'mission_wait_timeout'
                 release = (waiting >= self.cfg['pedestrian_wait'] if self.mode == 'pedestrian'
@@ -746,26 +759,25 @@ class LimoControl(Node):
                 return min(self.cfg['slow_speed'], self.cfg['default_speed']), clamp(
                     2.0*error, -self.max_curvature, self.max_curvature), 'holding_entry_heading'
         if self.mode in ('branch_a', 'branch_b'):
-            if not self.cfg['geometry_verified']:
-                return 0.0, 0.0, 'intersection_geometry_not_verified'
-            sign = 1 if self.mode == 'branch_a' else -1
-            if self.phase == 'approach' and travelled >= self.cfg['branch_approach']:
-                self.phase = 'turning'
-                self.phase_heading = self.pose[2]
-            if self.phase == 'turning':
-                progress = sign*wrap_angle(self.pose[2]-self.phase_heading)
-                if progress > self.cfg['branch_angle']+0.25:
-                    self.enter_hold('intersection_yaw_overshoot', now)
-                    return 0.0, 0.0, 'intersection_yaw_overshoot'
-                if progress >= self.cfg['branch_angle']-self.cfg['branch_yaw_tolerance']:
-                    self.phase, self.phase_travel = 'reacquire', self.travel
-                else:
-                    return self.cfg['branch_speed'], sign*self.cfg['branch_curvature'], 'intersection_odometry_turn'
-            if (self.phase == 'reacquire' and self.lane.get('valid') is True
-                    and self.travel-self.phase_travel >= self.cfg['branch_exit_distance']):
-                self._enter('follow', now)
+            if self.phase == 'branch_fixed_steering' and self.branch_fixed_elapsed < BRANCH_FIXED_SECONDS:
+                return BRANCH_FIXED_SPEED, self.fixed_branch_curvature(), 'branch_fixed_steering'
+            self._enter('follow', now)
         if self.mode == 'cones':
-            return self.forced_cone_control()
+            return self.cone_control(now)
+        if getattr(self, 'use_team_lane', False) and self.mode in ('follow', 'slow'):
+            if not self.fresh('team_lane', now):
+                return 0.0, 0.0, 'team_lane_stale_or_missing'
+            command = self.team_lane_command
+            speed = command.linear.x
+            if speed < -1e-6:
+                return max(speed, -0.05), 0.0, 'team_lane_reverse_search'
+            if speed <= 1e-6:
+                return 0.0, 0.0, 'team_lane_stop'
+            curvature = command.angular.z / speed
+            if (self.mode == 'slow' or self.slow_sign_until is not None
+                    or now < self.slow_until):
+                speed = min(speed, self.cfg['slow_speed'])
+            return speed, curvature, 'team_lane_follow'
         if self.lane.get('valid') is not True:
             if self.lane.get('reason') == 'invalid_camera_frame':
                 return 0.0, 0.0, 'camera_frame_invalid'
@@ -826,8 +838,9 @@ class LimoControl(Node):
             speed, curvature, reason = self.compute_control(now, dt)
             if not all(math.isfinite(v) for v in (speed, curvature)):
                 raise ValueError('Nonfinite control output')
-            speed = clamp(speed, -self.cfg['parking_speed'], self.cfg['max_speed'])
-            curvature = clamp(curvature, -self.max_curvature, self.max_curvature)
+            if self.mode != 'cones':
+                speed = clamp(speed, -self.cfg['parking_speed'], self.cfg['max_speed'])
+                curvature = clamp(curvature, -self.max_curvature, self.max_curvature)
             # Optional single-lane policy: retain measured-hit/braking checks,
             # but do not mistake missing returns for a measured obstacle.
             # Three-lane detections require coverage immediately, even before
@@ -847,13 +860,13 @@ class LimoControl(Node):
             if speed != 0:
                 if self.last_speed*speed < 0 or self.odom_speed*speed < -0.0004:
                     speed, curvature, reason = 0.0, 0.0, 'direction_change_wait_for_stop'
-            if speed != 0:
-                if self.mode != 'cones':
+            if speed != 0 and self.mode != 'cones':
+                if reason != 'branch_fixed_steering':
                     curvature = clamp(curvature, self.last_curvature-self.cfg['curvature_rate']*dt,
                                       self.last_curvature+self.cfg['curvature_rate']*dt)
-                # Slowing down is immediate; acceleration is limited.
-                if abs(speed) > abs(self.last_speed):
-                    speed = math.copysign(min(abs(speed), abs(self.last_speed)+self.cfg['acceleration']*dt), speed)
+                    # Slowing down is immediate; acceleration is limited.
+                    if abs(speed) > abs(self.last_speed):
+                        speed = math.copysign(min(abs(speed), abs(self.last_speed)+self.cfg['acceleration']*dt), speed)
                 braking_speed = max(abs(speed), abs(self.odom_speed))
                 horizon = (braking_speed*self.cfg['reaction_time'] +
                            braking_speed*braking_speed/(2*self.cfg['deceleration'])+0.12)

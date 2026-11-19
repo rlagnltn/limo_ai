@@ -6,8 +6,15 @@ DEFAULTS = dict(traffic_stopped_speed=0.005)
 
 class TrafficMission(Mission):
     name = 'traffic'
+
+    def enter(self, obs):
+        result = super().enter(obs)
+        if obs.signs.intersection({0, 1}):
+            return self.update(obs)
+        return result
+
     def update(self, obs):
-        if self.phase == 'waiting' and (obs.signs.intersection({0, 1}) or obs.lane.get('crosswalk')):
+        if self.phase == 'waiting' and obs.signs.intersection({0, 1}):
             self.phase = 'stopped'
             return Result({'mode': 'hold'}, reason='traffic_pixel_threshold_stop')
         if self.phase in ('stopping', 'stopped'):

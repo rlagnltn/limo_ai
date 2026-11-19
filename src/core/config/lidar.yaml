@@ -5,7 +5,7 @@ limo_e_stop:
     sensor_max_age: 0.5
     robot_front: 0.18
     robot_rear: 0.18
-    robot_width: 0.22
+    robot_width: 0.20
     max_speed: 0.3
     safety_margin: 0.04
     inf_is_free: false

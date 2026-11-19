@@ -3,4 +3,7 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
-    return LaunchDescription([Node(package='core', executable='lane', output='screen')])
+    return LaunchDescription([
+        Node(package='core', executable='lane', output='screen'),
+        Node(package='core', executable='team_lane', output='screen'),
+    ])

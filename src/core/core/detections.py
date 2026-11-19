@@ -29,7 +29,8 @@ class SignTracker:
         self.received = -math.inf
         self.large_cone_count = 0
 
-    def update(self, boxes, now):
+    def update(self, boxes, now, areas=None):
+        areas = self.areas if areas is None else areas
         if now-self.received > self.timeout:
             self.counts = {}
         seen = set()
@@ -39,9 +40,9 @@ class SignTracker:
             width, height = box.xmax-box.xmin, box.ymax-box.ymin
             if (identifier is not None and math.isfinite(box.probability)
                     and box.probability >= self.confidence and width > 0 and height > 0
-                    and width*height >= self.areas[identifier]):
+                    and width*height >= areas[identifier]):
                 seen.add(identifier)
-                if identifier == 7 and width*height >= 8000:
+                if identifier == 7:
                     self.large_cone_count += 1
         self.counts = {key: min(self.confirm_frames, self.counts.get(key, 0)+1) for key in seen}
         # A red observation inhibits departure immediately; green needs confirmation.

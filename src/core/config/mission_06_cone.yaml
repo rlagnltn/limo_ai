@@ -1,11 +1,4 @@
 core:
   ros__parameters:
     cone_exit_confirm: 1.0
-limo_control:
-  ros__parameters:
-    # Virtual central wheel steering angles, not vehicle heading changes.
-    cone_right_degrees: 10.0
-    cone_left_degrees: 15.0
-    cone_right_seconds: 2.0
-    cone_left_seconds: 2.0
-    cone_speed: 0.3
+    cone_slow_sign_min_area: 2800.0

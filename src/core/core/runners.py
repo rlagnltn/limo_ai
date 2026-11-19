@@ -1,6 +1,8 @@
 import rclpy
 import json
 import time
+from pathlib import Path
+from ament_index_python.packages import get_package_share_directory
 from rclpy.signals import SignalHandlerOptions
 from .configuration import ros_args
 
@@ -21,6 +23,14 @@ def run(cls, args=None):
 def lane(args=None):
     from .behaviors.detect_line import DetectLine
     run(DetectLine, args)
+
+
+def team_lane():
+    from jetracer_ros2 import simple_lane
+
+    config = Path(get_package_share_directory('core')) / 'config'
+    simple_lane.TUNE_FILE = str(config / 'simple_lane_tune_v9.json')
+    simple_lane.run_ros('drive', '/core/lane_cmd')
 
 
 def perception(args=None):

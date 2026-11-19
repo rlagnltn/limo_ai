@@ -14,6 +14,9 @@ class Observation:
     speed: float = 0.0
     reason: str = ''
     large_cone_count: int = 0
+    parking_state: str = 'WAIT'
+    parking_reason: str = ''
+    stop_line_seen_at: float | None = None
 
 
 @dataclass
