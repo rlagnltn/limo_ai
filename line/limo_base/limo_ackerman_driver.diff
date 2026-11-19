@@ -1,0 +1,32 @@
+--- /home/wego/limo_backups/lever_autonomy_20261118_225735/limo_ackerman_driver.cpp	2026-11-18 18:54:36.511810673 +0900
++++ /home/wego/wego_ws/src/limo_ros2/limo_base/src/limo_ackerman_driver.cpp	2026-11-18 22:59:54.474470762 +0900
+@@ -216,7 +216,28 @@
+                 uint16_t error_code = ((frame.data[5] & 0xff) | (frame.data[4] << 8));
+ 
+                 motion_mode_ = frame.data[6];
+-                
++
++                // 리모컨 레버: 원격(3) -> 대기(0) 로 바뀌면 코드 제어 모드(1)를 요청한다.
++                // 차가 1 이 될 때까지 상태 메시지마다 다시 요청(최대 10번). 시작할 때나 처음부터 0 이면 요청 안 함.
++                {
++                    static int prev_control_mode = -1;
++                    static int request_left = 0;
++                    if (prev_control_mode == 3 && control_mode == 0) {
++                        RCLCPP_INFO(this->get_logger(), "Remote lever: remote -> standby, requesting commanded mode");
++                        request_left = 10;
++                    }
++                    if (control_mode != 0) {
++                        if (request_left > 0 && control_mode == 1)
++                            RCLCPP_INFO(this->get_logger(), "Commanded mode active");
++                        request_left = 0;
++                    }
++                    if (request_left > 0) {
++                        enableCommandedMode();
++                        request_left--;
++                    }
++                    prev_control_mode = control_mode;
++                }
++
+                 processErrorCode(error_code);
+                 publishLimoState(frame.stamp, vehicle_state, control_mode,
+                                  battervyoltage, error_code, motion_mode_);

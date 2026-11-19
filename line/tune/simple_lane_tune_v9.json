@@ -1,0 +1,20 @@
+{
+ "h_min": 15,
+ "h_max": 50,
+ "s_min": 25,
+ "v_min": 50,
+ "ld_cm": 40,
+ "left_bias_cm": 0,
+ "vmax_cm": 40,
+ "ff_cm": 12,
+ "pre_steer": 0,
+ "latch": 1,
+ "latch_deg": 19,
+ "turn_in_cm": 65,
+ "turn_deg": 50,
+ "curve_v_cm": 22,
+ "smooth": 46,
+ "curve_in_deg": 25,
+ "curve_out": 6,
+ "mem_ld": 50
+}
